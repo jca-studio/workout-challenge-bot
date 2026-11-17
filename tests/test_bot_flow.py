@@ -313,6 +313,9 @@ class FakeResponse:
     async def send_message(self, content=None, **kw):
         self.sent.append((content, kw))
 
+    async def edit_message(self, **kw):
+        self.sent.append(("edit", kw))
+
 
 def fake_inter(guild, uid):
     return SimpleNamespace(user=SimpleNamespace(id=uid), guild=guild, guild_id=guild.id, response=FakeResponse())
@@ -357,3 +360,46 @@ def test_im_in_reply_and_who_is_playing(monkeypatch):
     who2 = fake_inter(guild, 503)
     run(main.handle_who(who2, db.get_challenge(ch.id).id))
     assert f"**{config.TEAM_NAMES[0]}** (1)" in who2.response.sent[0][0]
+
+
+def test_goals_all_and_approve_all(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    ch = db.create_challenge(1, "August Challenge", date(2027, 8, 1), date(2027, 8, 31), 99)
+    for uid in (601, 602, 603):
+        db.join(ch.id, uid)
+    db.set_goals(ch.id, 601, [("Work out", 3), ("Brush teeth", 7), ("Alcohol-free", 6)], False)
+    db.set_goals(ch.id, 602, [("Walk", 5), ("Read", 1), ("Veggies", 7)], False)
+    db.approve_goals(ch.id, 602)
+    run = asyncio.new_event_loop().run_until_complete
+
+    inter = fake_inter(guild, 99)
+    run(main.goals_all.callback(inter))
+    _, kw = inter.response.sent[0]
+    text = kw["embeds"][0].description
+    assert "⏳ <@601>" in text and "✅ <@602>" in text and "Work out: **3** days/week" in text
+    assert "Read: **1** day/week" in text and "**No goals yet:** <@603>" in text
+    button = kw["view"].children[0]
+    assert button.label == "Approve all (1)" and not button.disabled
+
+    click = fake_inter(guild, 99)
+    run(main.handle_approve_all(click, ch.id))
+    _, kw = click.response.sent[0]
+    assert "⏳" not in kw["embeds"][0].description.split("No goals yet")[0]
+    assert kw["view"].children[0].disabled and kw["view"].children[0].label == "All approved"
+    assert all(g.approved for g in db.goals(ch.id, 601))
+
+
+def test_goals_all_splits_long_lists():
+    db = main.db
+    ch = db.create_challenge(1, "Big", date(2027, 9, 1), date(2027, 9, 30), 99)
+    for uid in range(700, 760):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("A really quite long goal name here", 3)] * 3, False)
+    embeds, waiting = main.all_goals_embeds(ch)
+    assert waiting == 60 and len(embeds) > 1
+    pages = main.message_pages(embeds)
+    assert len(pages) > 1 and sum(len(p) for p in pages) == len(embeds)
+    assert all(sum(len(e) for e in p) <= 6000 and len(p) <= 10 for p in pages)
+    assert all(len(e.description) <= 4096 for e in embeds)

@@ -420,6 +420,94 @@ async def goals_view(inter: discord.Interaction, member: discord.Member | None =
     await inter.response.send_message(f"**{who.display_name}'s goals**\n{text}", ephemeral=True)
 
 
+def all_goals_embeds(ch: Challenge) -> tuple[list[discord.Embed], int]:
+    """Everyone's goals in one view. Returns the embeds and how many players are waiting for approval."""
+    blocks, waiting, no_goals = [], 0, []
+    for p in db.players(ch.id):
+        uid = p["user_id"]
+        gs = db.goals(ch.id, uid)
+        if not gs:
+            no_goals.append(f"<@{uid}>")
+            continue
+        approved = all(g.approved for g in gs)
+        waiting += 0 if approved else 1
+        team = f" · {p['team']}" if p["team"] else ""
+        lines = [f"{'✅' if approved else '⏳'} <@{uid}>{team}"]
+        lines += [f"\u2003{g.slot}. {g.name}: **{g.target_days}** day{'s' if g.target_days > 1 else ''}/week"
+                  + (" 📸" if photo_needed(g) else "") for g in gs]
+        blocks.append("\n".join(lines))
+    if no_goals:
+        blocks.append("**No goals yet:** " + " ".join(no_goals))
+    if not blocks:
+        blocks = ["Nobody has signed up yet."]
+    # Split across embeds so long lists fit Discord's size limits.
+    embeds, current = [], ""
+    for b in blocks:
+        if current and len(current) + len(b) + 2 > 2800:
+            embeds.append(current)
+            current = ""
+        current += ("\n\n" if current else "") + b
+    embeds.append(current)
+    out = []
+    for i, text in enumerate(embeds):
+        e = discord.Embed(description=text, color=PINK)
+        if i == 0:
+            e.title = f"{ch.name}: everyone's goals"
+        out.append(e)
+    out[-1].set_footer(text=f"✅ approved · ⏳ waiting ({waiting}) · 📸 photo required")
+    return out, waiting
+
+
+def message_pages(embeds: list[discord.Embed], limit: int = 5800) -> list[list[discord.Embed]]:
+    """Discord allows about 6,000 characters across all embeds in one message, so split long lists."""
+    pages, page, size = [], [], 0
+    for e in embeds:
+        if page and (size + len(e) > limit or len(page) == 10):
+            pages.append(page)
+            page, size = [], 0
+        page.append(e)
+        size += len(e)
+    pages.append(page)
+    return pages
+
+
+def approve_view(ch: Challenge, waiting: int) -> discord.ui.View:
+    done = waiting == 0
+    return make_view([discord.ui.Button(
+        label="All approved" if done else f"Approve all ({waiting})", emoji="✅",
+        style=discord.ButtonStyle.secondary if done else discord.ButtonStyle.success,
+        disabled=done, custom_id=f"mb:approveall:{ch.id}")])
+
+
+@goals_group.command(name="all", description="Commissioner: see everyone's goals and approve them all at once.")
+async def goals_all(inter: discord.Interaction):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch:
+        return await deny(inter, "No challenge running.")
+    embeds, waiting = all_goals_embeds(ch)
+    pages = message_pages(embeds)
+    await inter.response.send_message(embeds=pages[0], view=approve_view(ch, waiting), ephemeral=True)
+    for page in pages[1:]:
+        await inter.followup.send(embeds=page, ephemeral=True)
+
+
+async def handle_approve_all(inter: discord.Interaction, challenge_id: int):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.get_challenge(challenge_id)
+    if not ch:
+        return await deny(inter, "I couldn't find that challenge.")
+    n = db.approve_goals(ch.id)
+    embeds, waiting = all_goals_embeds(ch)
+    pages = message_pages(embeds)
+    await inter.response.edit_message(embeds=pages[0], view=approve_view(ch, waiting))
+    if len(pages) > 1:
+        await inter.followup.send(f"Approved everyone's goals ({n} goals). Run `/goals all` again for the updated list.",
+                                  ephemeral=True)
+
+
 bot.tree.add_command(goals_group)
 
 
@@ -766,6 +854,8 @@ async def on_interaction(inter: discord.Interaction):
             await handle_signup(inter, int(parts[2]), kind == "join")
         elif kind == "who":
             await handle_who(inter, int(parts[2]))
+        elif kind == "approveall":
+            await handle_approve_all(inter, int(parts[2]))
         elif kind == "p":
             await handle_proof_button(inter, int(parts[2]), parts[3], parts[4])
         elif kind in ("yes", "no"):
