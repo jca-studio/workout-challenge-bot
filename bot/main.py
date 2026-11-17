@@ -414,6 +414,63 @@ def goals_locked(ch: Challenge, user_id: int) -> bool:
     return ch.status == "active" and len(gs) == 3 and all(g.approved for g in gs)
 
 
+def add_goal_button(ch: Challenge, user_id: int) -> discord.ui.Button | None:
+    have = len(db.goals(ch.id, user_id))
+    if have >= 3:
+        return None
+    label = "Add my goals" if have == 0 else f"Add goal {have + 1} of 3"
+    return discord.ui.Button(label=label, emoji="➕", style=discord.ButtonStyle.success,
+                             custom_id=f"mb:addgoal:{ch.id}")
+
+
+def try_add_goal(ch: Challenge, user_id: int, goal: str, days: int) -> tuple[bool, str]:
+    """Shared by /goals add and the goal form. Returns (added, message)."""
+    if not db.is_player(ch.id, user_id):
+        return False, "Join the challenge first (the **I'm in** button on the sign-up post)."
+    if goals_locked(ch, user_id):
+        return False, "Your goals are locked in for this challenge. Ask the commissioner if something needs to change."
+    goal = goal.strip()
+    if not goal:
+        return False, "Your goal needs a name."
+    slot = db.add_goal(ch.id, user_id, goal, days, photo_default=(config.PHOTO_MODE == "required"))
+    if slot is None:
+        return False, ("You already have 3 goals. To swap one, remove it first with `/goals remove`.\n\n"
+                       + goals_summary(ch, user_id))
+    return True, f"Added goal {slot}! 💪🏾\n\n" + goals_summary(ch, user_id)
+
+
+class GoalForm(discord.ui.Modal):
+    """A pop-up form for one goal: what you'll do, and a dropdown for how many days."""
+
+    def __init__(self, ch: Challenge, number: int):
+        super().__init__(title=f"Goal {number} of 3")
+        self.ch = ch
+        self.goal = discord.ui.TextInput(placeholder="e.g. Yoga, Affirmations, 7 hours of sleep", max_length=80)
+        self.days = discord.ui.Select(placeholder="Pick one", options=[
+            discord.SelectOption(label=c.name, value=str(c.value)) for c in DAY_CHOICES])
+        self.add_item(discord.ui.Label(text="I will…", description="What you'll do", component=self.goal))
+        self.add_item(discord.ui.Label(text="How many days per week?", component=self.days))
+
+    async def on_submit(self, inter: discord.Interaction):
+        added, msg = try_add_goal(self.ch, inter.user.id, self.goal.value, int(self.days.values[0]))
+        nxt = add_goal_button(self.ch, inter.user.id)
+        await inter.response.send_message(msg, ephemeral=True, view=make_view([nxt]) if nxt else discord.utils.MISSING)
+
+
+async def handle_add_goal_button(inter: discord.Interaction, challenge_id: int):
+    ch = db.get_challenge(challenge_id)
+    if not ch or ch.status in ("finished", "cancelled"):
+        return await deny(inter, "That challenge isn't running.")
+    if not db.is_player(ch.id, inter.user.id):
+        return await deny(inter, "Join the challenge first (the **I'm in** button on the sign-up post).")
+    if goals_locked(ch, inter.user.id):
+        return await deny(inter, "Your goals are locked in for this challenge.")
+    have = len(db.goals(ch.id, inter.user.id))
+    if have >= 3:
+        return await deny(inter, "You've got all 3! 🎉\n\n" + goals_summary(ch, inter.user.id))
+    await inter.response.send_modal(GoalForm(ch, have + 1))
+
+
 @goals_group.command(name="add", description="Add one of your 3 goals: I will ___ on ___ days per week.")
 @app_commands.rename(days="how-many-days")
 @app_commands.describe(goal="What you'll do, e.g. Yoga, Affirmations, 7 hours of sleep, Alcohol-free",
@@ -423,15 +480,11 @@ async def goals_add(inter: discord.Interaction, goal: app_commands.Range[str, 1,
     ch = db.current_challenge(inter.guild_id)
     if not ch:
         return await deny(inter, "No challenge running right now.")
-    if not db.is_player(ch.id, inter.user.id):
-        return await deny(inter, "Join the challenge first (the **I'm in** button on the sign-up post).")
-    if goals_locked(ch, inter.user.id):
-        return await deny(inter, "Your goals are locked in for this challenge. Ask the commissioner if something needs to change.")
-    slot = db.add_goal(ch.id, inter.user.id, goal, days, photo_default=(config.PHOTO_MODE == "required"))
-    if slot is None:
-        return await deny(inter, "You already have 3 goals. To swap one, remove it first with `/goals remove`.\n\n"
-                          + goals_summary(ch, inter.user.id))
-    await inter.response.send_message(f"Added goal {slot}! 💪🏾\n\n" + goals_summary(ch, inter.user.id), ephemeral=True)
+    added, msg = try_add_goal(ch, inter.user.id, goal, days)
+    if not added:
+        return await deny(inter, msg)
+    nxt = add_goal_button(ch, inter.user.id)
+    await inter.response.send_message(msg, ephemeral=True, view=make_view([nxt]) if nxt else discord.utils.MISSING)
 
 
 @goals_group.command(name="remove", description="Remove one of your goals so you can add a different one.")
@@ -898,6 +951,8 @@ async def on_interaction(inter: discord.Interaction):
             await handle_who(inter, int(parts[2]))
         elif kind == "approveall":
             await handle_approve_all(inter, int(parts[2]))
+        elif kind == "addgoal":
+            await handle_add_goal_button(inter, int(parts[2]))
         elif kind == "p":
             await handle_proof_button(inter, int(parts[2]), parts[3], parts[4])
         elif kind in ("yes", "no"):
@@ -913,14 +968,20 @@ async def handle_signup(inter: discord.Interaction, challenge_id: int, join: boo
         return await deny(inter, "Sign-ups are closed. Catch the next one! 💕")
     changed = db.join(ch.id, inter.user.id) if join else db.leave(ch.id, inter.user.id)
     if join:
-        msg = ("You're in! 👑 Next, add your 3 goals with `/goals add`, one at a time." if changed
-               else "You're already in! 👑 Add or change your goals anytime before the start with `/goals add` "
-                    "and `/goals remove`.")
-        view = make_view([
-            discord.ui.Button(label="You're in", emoji="✅", style=discord.ButtonStyle.success, disabled=True,
-                              custom_id=f"mb:noop:{ch.id}"),
-            who_button(ch.id, "See who else is playing"),
-        ])
+        have = len(db.goals(ch.id, inter.user.id))
+        if changed:
+            msg = "You're in! 👑 Next, add your 3 goals. Tap **Add my goals** below."
+        elif have < 3:
+            msg = f"You're already in! 👑 You have {have} of 3 goals. Tap below to add the rest."
+        else:
+            msg = "You're already in, with all 3 goals set! 👑 To swap one, use `/goals remove`."
+        buttons = [discord.ui.Button(label="You're in", emoji="✅", style=discord.ButtonStyle.success, disabled=True,
+                                     custom_id=f"mb:noop:{ch.id}")]
+        nxt = add_goal_button(ch, inter.user.id)
+        if nxt:
+            buttons.append(nxt)
+        buttons.append(who_button(ch.id, "See who else is playing"))
+        view = make_view(buttons)
         await inter.response.send_message(msg, view=view, ephemeral=True)
     else:
         await inter.response.send_message("You're out." if changed else "You weren't signed up.", ephemeral=True)

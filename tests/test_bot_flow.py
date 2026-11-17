@@ -316,6 +316,9 @@ class FakeResponse:
     async def edit_message(self, **kw):
         self.sent.append(("edit", kw))
 
+    async def send_modal(self, modal):
+        self.sent.append(("modal", {"modal": modal}))
+
 
 def fake_inter(guild, uid):
     return SimpleNamespace(user=SimpleNamespace(id=uid), guild=guild, guild_id=guild.id, response=FakeResponse())
@@ -336,7 +339,8 @@ def test_im_in_reply_and_who_is_playing(monkeypatch):
     buttons = kw["view"].children
     assert msg.startswith("You're in!") and kw["ephemeral"]
     assert buttons[0].disabled and buttons[0].label == "You're in"
-    assert buttons[1].label == "See who else is playing" and not buttons[1].disabled
+    assert [b.label for b in buttons] == ["You're in", "Add my goals", "See who else is playing"]
+    assert not buttons[2].disabled
 
     again = fake_inter(guild, 501)
     run(main.handle_signup(again, ch.id, True))
@@ -438,3 +442,43 @@ def test_goals_add_one_at_a_time_and_remove():
     outsider = fake_inter(guild, 899)
     run(main.goals_add.callback(outsider, "Run", 3))
     assert "Join the challenge first" in outsider.response.sent[0][0]
+
+
+def test_goal_form_walks_through_three_goals():
+    db = main.db
+    guild = FakeGuild()
+    ch = db.create_challenge(1, "Nov", date(2027, 11, 1), date(2027, 11, 30), 99)
+    run = asyncio.new_event_loop().run_until_complete
+    monkey_now = at(date(2027, 10, 20), 12)
+    main.game.now_local, real_now = (lambda: monkey_now), main.game.now_local
+    try:
+        join = fake_inter(guild, 901)
+        run(main.handle_signup(join, ch.id, True))
+        labels = [b.label for b in join.response.sent[0][1]["view"].children]
+        assert labels == ["You're in", "Add my goals", "See who else is playing"]
+
+        for n, (goal, days) in enumerate([("Yoga", 3), ("Affirmations", 7), ("7 hours of sleep", 7)], 1):
+            click = fake_inter(guild, 901)
+            run(main.handle_add_goal_button(click, ch.id))
+            kind, kw = click.response.sent[0]
+            form = kw["modal"]
+            assert kind == "modal" and form.title == f"Goal {n} of 3"
+            payload = form.to_dict()  # what Discord receives; fails here if the form is malformed
+            assert len(payload["components"]) == 2
+            form.goal = SimpleNamespace(value=goal)
+            form.days = SimpleNamespace(values=[str(days)])
+            done = fake_inter(guild, 901)
+            run(form.on_submit(done))
+            msg, kw = done.response.sent[0]
+            assert f"Added goal {n}" in msg
+            if n < 3:
+                assert kw["view"].children[0].label == f"Add goal {n + 1} of 3"
+            else:
+                assert "That's all 3" in msg and "view" not in kw or kw["view"] is discord.utils.MISSING
+
+        full = fake_inter(guild, 901)
+        run(main.handle_add_goal_button(full, ch.id))
+        assert "all 3" in full.response.sent[0][0]
+        assert [g.target_days for g in db.goals(ch.id, 901)] == [3, 7, 7]
+    finally:
+        main.game.now_local = real_now
