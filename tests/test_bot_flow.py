@@ -211,3 +211,82 @@ def test_crowns_move_between_months():
     assert guild.get_member(2).nick == "👑 Mom2"
     assert guild.get_member(3).nick == "👑💎 Mom3"
     assert {r["user_id"] for r in db.crowns(guild.id)} == {2, 3}
+
+
+def test_signup_post_has_rules_players_and_deadline():
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    ch = db.create_challenge(1, "March Challenge", date(2027, 3, 1), date(2027, 3, 31), 99,
+                             signup_deadline=date(2027, 2, 26))
+    for uid in (201, 202, 203):
+        db.join(ch.id, uid)
+    e = main.signup_embed(guild, ch)
+    names = [f.name for f in e.fields]
+    assert names[:7] == ["🎯 Goals", "💪🏾 Teams", "📸 Checking in", "💋 Points", "⚡ Mini missions",
+                         "🍑 Weekly schedule", "🏆 Prizes"]
+    assert names[-1] == "👯‍♀️ Signed up (3)" and "<@202>" in e.fields[-1].value
+    assert "Sign up by Fri Feb 26 at 11:59 p.m. ET" in e.description
+    assert "8 p.m. ET" in e.fields[2].value and "<#11>" in e.fields[2].value
+    assert len(e) < 6000 and all(len(f.value) <= 1024 for f in e.fields)
+    closed = main.signup_embed(guild, ch, closed=True)
+    assert "Sign-ups are closed" in closed.description
+    print("\n" + e.description)
+    for f in e.fields:
+        print(f"\n{f.name}\n{f.value}")
+
+
+def test_deadline_closes_signups_and_makes_teams(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    ch = db.create_challenge(1, "April", date(2027, 4, 1), date(2027, 4, 30), 99, signup_deadline=date(2027, 3, 28))
+    for uid in range(300, 310):
+        db.join(ch.id, uid)
+    run = asyncio.new_event_loop().run_until_complete
+    assert game.signups_open(ch, at(date(2027, 3, 28), 23))           # 11 p.m. on deadline day: still open
+    run(main.run_jobs(guild, ch, at(date(2027, 3, 28), 23)))
+    assert db.get_challenge(ch.id).status == "signup"
+    late = at(date(2027, 3, 29), 0)
+    assert not game.signups_open(ch, late)                              # midnight: closed
+    run(main.run_jobs(guild, ch, late))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "ready" and ch.mode == "teams"                  # locked 3 days before the start
+    run(main.run_jobs(guild, ch, at(date(2027, 3, 30), 12)))
+    assert db.get_challenge(ch.id).status == "ready"                    # doesn't start early
+    run(main.run_jobs(guild, ch, at(date(2027, 4, 1), 7)))
+    assert db.get_challenge(ch.id).status == "active"
+
+
+def test_deadline_with_too_few_players_stays_open():
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    ch = db.create_challenge(1, "May", date(2027, 5, 1), date(2027, 5, 31), 99, signup_deadline=date(2027, 4, 28))
+    db.join(ch.id, 400)
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, ch, at(date(2027, 4, 29), 9)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "signup" and ch.signup_deadline is None
+    assert game.signups_open(ch, at(date(2027, 4, 29), 10))
+    assert "staying open" in guild.ann.sent[-1][0]
+
+
+def test_old_database_gets_deadline_column(tmp_path):
+    import sqlite3
+    from bot.db import DB
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE challenges (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, "
+                "name TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, status TEXT NOT NULL, "
+                "mode TEXT, signup_channel_id INTEGER, signup_message_id INTEGER, created_by INTEGER, "
+                "created_at TEXT NOT NULL)")
+    con.execute("INSERT INTO challenges (guild_id,name,start_date,end_date,status,created_at) "
+                "VALUES (1,'Old','2026-12-01','2026-12-31','active','x')")
+    con.commit()
+    con.close()
+    d = DB(path)
+    assert d.current_challenge(1).signup_deadline is None
+    c = d.create_challenge(2, "New", date(2027, 1, 1), date(2027, 1, 31), 1, signup_deadline=date(2026, 12, 30))
+    assert c.signup_deadline == date(2026, 12, 30)

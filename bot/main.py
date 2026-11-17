@@ -139,8 +139,11 @@ challenge_group = app_commands.Group(name="challenge", description="Run the mont
 
 
 @challenge_group.command(name="open", description="Commissioner: open sign-ups for a new challenge.")
-@app_commands.describe(start="First day, YYYY-MM-DD", end="Last day, YYYY-MM-DD", name="e.g. December Challenge")
-async def challenge_open(inter: discord.Interaction, start: str, end: str, name: str | None = None):
+@app_commands.describe(start="First day, YYYY-MM-DD", end="Last day, YYYY-MM-DD",
+                       signup_deadline="Last day to join, YYYY-MM-DD (default: the day before the start)",
+                       name="e.g. December Challenge")
+async def challenge_open(inter: discord.Interaction, start: str, end: str, signup_deadline: str | None = None,
+                         name: str | None = None):
     if not is_commish(inter):
         return await deny(inter, "Only the commissioner can do that.")
     if db.current_challenge(inter.guild_id):
@@ -148,39 +151,105 @@ async def challenge_open(inter: discord.Interaction, start: str, end: str, name:
     ann = channel(inter.guild, "announce_channel_id")
     if not ann:
         return await deny(inter, "Run `/setup` first.")
+    today = game.now_local().date()
     try:
         s, e = date.fromisoformat(start), date.fromisoformat(end)
         assert s <= e
     except Exception:
         return await deny(inter, "Dates need to look like 2026-12-01, and the end can't be before the start.")
-    ch = db.create_challenge(inter.guild_id, name or f"{s.strftime('%B')} Challenge", s, e, inter.user.id)
-    embed = discord.Embed(
-        title=f"❤️✨ {ch.name} ✨❤️", color=PINK,
-        description=(f"**{pretty(s)} – {pretty(e)}**\n\nTap **I'm in** to play, then set your 3 goals with `/goals set`.\n"
-                     f"{config.TEAM_MODE_MIN_PLAYERS}+ players = **{' vs '.join(config.TEAM_NAMES)}**. "
-                     f"Fewer = everyone for herself.\n\nEvery goal is: *I will __ on __ days per week.*"))
-    embed.add_field(name="Players", value="Nobody yet")
+    if signup_deadline:
+        try:
+            dl = date.fromisoformat(signup_deadline)
+        except ValueError:
+            return await deny(inter, "The sign-up deadline needs to look like 2026-11-28.")
+        if dl > s or dl < today:
+            return await deny(inter, "The sign-up deadline has to be between today and the start date.")
+    else:
+        dl = game.default_deadline(s, today)
+    ch = db.create_challenge(inter.guild_id, name or f"{s.strftime('%B')} Challenge", s, e, inter.user.id, dl)
     view = make_view([
         discord.ui.Button(label="I'm in", style=discord.ButtonStyle.success, emoji="👑", custom_id=f"mb:join:{ch.id}"),
         discord.ui.Button(label="Leave", style=discord.ButtonStyle.secondary, custom_id=f"mb:leave:{ch.id}"),
     ])
-    msg = await ann.send(embed=embed, view=view)
+    msg = await ann.send(embed=signup_embed(inter.guild, ch), view=view)
     db.update_challenge(ch.id, signup_channel_id=ann.id, signup_message_id=msg.id)
-    await inter.response.send_message(f"Sign-ups are open in {ann.mention}.", ephemeral=True)
+    await inter.response.send_message(
+        f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
 
 
-async def refresh_signup(guild: discord.Guild, ch: Challenge):
+def hour_label(h: int) -> str:
+    return {0: "midnight", 12: "noon"}.get(h, f"{h % 12} {'a.m.' if h < 12 else 'p.m.'}")
+
+
+def tz_label() -> str:
+    return {"America/New_York": "ET", "America/Chicago": "CT", "America/Denver": "MT",
+            "America/Los_Angeles": "PT"}.get(str(config.TZ), str(config.TZ))
+
+
+def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> discord.Embed:
+    """The sign-up post: dates, deadline, the full rules and who's in so far."""
+    tz = tz_label()
+    proof = channel(guild, "proof_channel_id")
+    proof_name = proof.mention if proof else "the proof channel"
+    deadline = (f"**Sign up by {pretty(ch.signup_deadline)} at 11:59 p.m. {tz}**"
+                if ch.signup_deadline else "**Sign up before the start date**")
+    e = discord.Embed(
+        title=f"❤️✨ {ch.name} ✨❤️", color=PINK,
+        description=(f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}**\n"
+                     + ("🔒 **Sign-ups are closed.**" if closed else
+                        f"⏰ {deadline}\n\nTap **I'm in** below, then set your 3 goals with `/goals set`.")))
+    photo = {"required": "A photo is required for every check-in.",
+             "per_goal": "Some goals need a photo; the commissioner will let you know which.",
+             }.get(config.PHOTO_MODE, "Photos aren't required, but they're encouraged. Show off! 📸")
+    e.add_field(name="🎯 Goals", inline=False, value=(
+        "Set exactly **3 goals** with `/goals set`. Every goal is:\n"
+        "*I will ___ on ___ days per week* (1–7 days).\n"
+        "\"Don't\" goals get flipped: \"only drink 1 day\" becomes **alcohol-free 6 days**. "
+        "One check-in per goal per day. The commissioner approves goals before the start."))
+    e.add_field(name="💪🏾 Teams", inline=False, value=(
+        f"**{config.TEAM_MODE_MIN_PLAYERS}+ players:** split randomly into **{' vs '.join(config.TEAM_NAMES)}**.\n"
+        f"**Fewer:** everyone plays for herself."
+        + (" Team scores are compared by average per player." if config.TEAM_SCORE_AVERAGE else "")))
+    e.add_field(name="📸 Checking in", inline=False, value=(
+        f"Post a photo in {proof_name} and tap which goal it's for, or use `/checkin`. "
+        f"{photo}\nAt {hour_label(config.REMINDER_HOUR)} {tz} you'll get a reminder if you haven't checked in that day."))
+    e.add_field(name="💋 Points", inline=False, value=(
+        "Each goal is worth up to **10 points a week**: 10 × days done ÷ target. "
+        "Going past your target doesn't earn extra.\n"
+        "**Perfect week** (every goal hit): your week's goal points × **1.5**.\n"
+        "**Team bonus:** if every teammate has a perfect week, the team gets **+25%** that week."))
+    e.add_field(name="⚡ Mini missions", inline=False, value=(
+        f"A new one posts every morning at {hour_label(config.MISSION_POST_HOUR)} {tz}. "
+        f"Worth 0.5–2 points, 24 hours to do it, up to **{fmt(config.MISSION_CAP)} points** per person for the "
+        "challenge. They don't count toward a perfect week."))
+    e.add_field(name="🍑 Weekly schedule", inline=False, value=(
+        f"Weeks run **Saturday–Friday**. You can log any day of the current week until **Friday at midnight {tz}**, "
+        f"then that week locks. Standings post **Saturday at {hour_label(config.STANDINGS_HOUR)} {tz}**. "
+        "Short weeks at the start or end of the challenge shrink your targets to fit."))
+    crown = (f" and a {config.WINNER_EMOJI} / {config.TOP_SCORER_EMOJI} on their name until the next challenge"
+             if config.CROWN_NICKNAMES else "")
+    e.add_field(name="🏆 Prizes", inline=False, value=(
+        f"**Winners** get the **{config.WINNER_ROLE_NAME}** role. **Top scorer** gets **{config.TOP_SCORER_ROLE_NAME}**"
+        f"{crown}. Bragging rights included. 👑"))
+    players = db.players(ch.id)
+    e.add_field(name=f"👯‍♀️ Signed up ({len(players)})", inline=False,
+                value=(" ".join(f"<@{p['user_id']}>" for p in players) or "Nobody yet. Be the first!")[:1024])
+    e.set_footer(text="Commands: /howtoplay · /goals set · /checkin · /mystats · /leaderboard")
+    return e
+
+
+async def refresh_signup(guild: discord.Guild, ch: Challenge, closed: bool = False):
+    """Rebuild the sign-up post so the player list (and closed status) stay current."""
     if not ch.signup_message_id:
         return
     try:
         msg = await guild.get_channel(ch.signup_channel_id).fetch_message(ch.signup_message_id)
+        if closed:
+            await msg.edit(embed=signup_embed(guild, ch, closed=True), view=None)
+        else:
+            await msg.edit(embed=signup_embed(guild, ch))
     except Exception:
-        return
-    players = db.players(ch.id)
-    embed = msg.embeds[0]
-    value = " ".join(f"<@{p['user_id']}>" for p in players) or "Nobody yet"
-    embed.set_field_at(0, name=f"Players ({len(players)})", value=value[:1024])
-    await msg.edit(embed=embed)
+        log.warning("couldn't update the sign-up post", exc_info=True)
 
 
 @challenge_group.command(name="lock", description="Commissioner: close sign-ups, pick the mode and make teams.")
@@ -222,11 +291,7 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
         lines.append("Commissioner, these goals need approval (`/commish approve`): "
                      + " ".join(f"<@{u}>" for u in unapproved))
     lines.append(f"The challenge starts **{pretty(ch.start)}**.")
-    try:
-        msg = await guild.get_channel(ch.signup_channel_id).fetch_message(ch.signup_message_id)
-        await msg.edit(view=None)
-    except Exception:
-        pass
+    await refresh_signup(guild, ch, closed=True)
     return discord.Embed(title=f"Sign-ups closed: {len(players)} players, {chosen} mode",
                          description="\n\n".join(lines), color=PINK)
 
@@ -258,7 +323,9 @@ async def challenge_status(inter: discord.Interaction):
         rows.append(f"<@{p['user_id']}>{team}: {state}")
     embed = discord.Embed(title=ch.name, color=PINK,
                           description=f"{pretty(ch.start)} – {pretty(ch.end)} · **{ch.status}**"
-                                      + (f" · {ch.mode} mode" if ch.mode else ""))
+                                      + (f" · {ch.mode} mode" if ch.mode else "")
+                                      + (f"\nSign-up deadline: {pretty(ch.signup_deadline)}"
+                                         if ch.signup_deadline and ch.status == "signup" else ""))
     embed.add_field(name=f"Players ({len(players)})", value="\n".join(rows)[:1024] or "Nobody yet", inline=False)
     await inter.response.send_message(embed=embed, ephemeral=True)
 
@@ -673,8 +740,8 @@ async def on_interaction(inter: discord.Interaction):
 
 async def handle_signup(inter: discord.Interaction, challenge_id: int, join: bool):
     ch = db.get_challenge(challenge_id)
-    if not ch or ch.status != "signup":
-        return await deny(inter, "Sign-ups are closed.")
+    if not ch or not game.signups_open(ch, game.now_local()):
+        return await deny(inter, "Sign-ups are closed. Catch the next one! 💕")
     changed = db.join(ch.id, inter.user.id) if join else db.leave(ch.id, inter.user.id)
     if join:
         msg = ("You're in! 👑 Now set your 3 goals with `/goals set`." if changed else "You're already in.")
@@ -739,11 +806,16 @@ async def scheduler():
 async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     ann = channel(guild, "announce_channel_id")
     today = now.date()
-    if ch.status == "signup" and today >= ch.start and now.hour >= config.MISSION_POST_HOUR:
+    if game.should_lock(ch, now):
         if len(db.players(ch.id)) < 2:
+            # Not enough players: keep sign-ups open (drop the deadline) instead of shutting everyone out.
+            if ch.signup_deadline:
+                db.update_challenge(ch.id, signup_deadline=None)
+                await refresh_signup(guild, db.get_challenge(ch.id))
             if ann and not db.job_done(ch.id, "too_few", key := today.isoformat()):
                 db.mark_job(ch.id, "too_few", key)
-                await ann.send(f"{ch.name} can't start with fewer than 2 players. Tap **I'm in** on the sign-up post!")
+                await ann.send(f"{ch.name} needs at least 2 players, so sign-ups are staying open. "
+                               "Tap **I'm in** on the sign-up post!")
             return
         embed = await lock_signups(guild, ch)
         if ann:

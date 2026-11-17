@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS challenges (
     mode TEXT,                       -- teams | individual
     signup_channel_id INTEGER,
     signup_message_id INTEGER,
+    signup_deadline TEXT,            -- last day to join (inclusive)
     created_by INTEGER,
     created_at TEXT NOT NULL
 );
@@ -117,6 +118,7 @@ class Challenge:
     mode: str | None
     signup_channel_id: int | None
     signup_message_id: int | None
+    signup_deadline: date | None = None
 
 
 @dataclass
@@ -136,6 +138,10 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        # Databases created before the sign-up deadline existed get the new column.
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(challenges)")}
+        if "signup_deadline" not in cols:
+            self.conn.execute("ALTER TABLE challenges ADD COLUMN signup_deadline TEXT")
         self.conn.commit()
 
     def _x(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -165,7 +171,8 @@ class DB:
             return None
         return Challenge(r["id"], r["guild_id"], r["name"], date.fromisoformat(r["start_date"]),
                          date.fromisoformat(r["end_date"]), r["status"], r["mode"],
-                         r["signup_channel_id"], r["signup_message_id"])
+                         r["signup_channel_id"], r["signup_message_id"],
+                         date.fromisoformat(r["signup_deadline"]) if r["signup_deadline"] else None)
 
     def current_challenge(self, guild_id: int) -> Challenge | None:
         r = self.conn.execute(
@@ -179,11 +186,13 @@ class DB:
             (guild_id,)).fetchone()
         return self._challenge(r)
 
-    def create_challenge(self, guild_id: int, name: str, start: date, end: date, created_by: int) -> Challenge:
+    def create_challenge(self, guild_id: int, name: str, start: date, end: date, created_by: int,
+                         signup_deadline: date | None = None) -> Challenge:
         cur = self._x(
-            "INSERT INTO challenges (guild_id,name,start_date,end_date,status,created_by,created_at) "
-            "VALUES (?,?,?,?,'signup',?,?)",
-            (guild_id, name, start.isoformat(), end.isoformat(), created_by, datetime.now(UTC).isoformat()),
+            "INSERT INTO challenges (guild_id,name,start_date,end_date,status,created_by,created_at,signup_deadline) "
+            "VALUES (?,?,?,?,'signup',?,?,?)",
+            (guild_id, name, start.isoformat(), end.isoformat(), created_by, datetime.now(UTC).isoformat(),
+             signup_deadline.isoformat() if signup_deadline else None),
         )
         return self.get_challenge(cur.lastrowid)
 

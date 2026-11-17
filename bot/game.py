@@ -125,3 +125,32 @@ def open_goals_today(db: DB, challenge: Challenge, user_id: int, today: date):
             continue
         out.append(g)
     return out
+
+
+def signup_closes(challenge: Challenge) -> datetime | None:
+    """Sign-ups close at midnight at the end of the deadline day."""
+    if not challenge.signup_deadline:
+        return None
+    return datetime.combine(challenge.signup_deadline + timedelta(days=1), time(0, 0), tzinfo=config.TZ)
+
+
+def signups_open(challenge: Challenge, now: datetime) -> bool:
+    if challenge.status != "signup":
+        return False
+    closes = signup_closes(challenge)
+    return closes is None or now < closes
+
+
+def should_lock(challenge: Challenge, now: datetime) -> bool:
+    """Lock when the deadline passes, or on the start date as a fallback."""
+    if challenge.status != "signup":
+        return False
+    closes = signup_closes(challenge)
+    if closes and now >= closes:
+        return True
+    return now.date() >= challenge.start and now.hour >= config.MISSION_POST_HOUR
+
+
+def default_deadline(start: date, today: date) -> date:
+    """The day before the start, unless that's already passed."""
+    return max(start - timedelta(days=1), today)
