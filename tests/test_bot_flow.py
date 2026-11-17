@@ -444,41 +444,47 @@ def test_goals_add_one_at_a_time_and_remove():
     assert "Join the challenge first" in outsider.response.sent[0][0]
 
 
-def test_goal_form_walks_through_three_goals():
+def test_goals_form_all_three_at_once():
     db = main.db
     guild = FakeGuild()
     ch = db.create_challenge(1, "Nov", date(2027, 11, 1), date(2027, 11, 30), 99)
     run = asyncio.new_event_loop().run_until_complete
-    monkey_now = at(date(2027, 10, 20), 12)
-    main.game.now_local, real_now = (lambda: monkey_now), main.game.now_local
-    try:
-        join = fake_inter(guild, 901)
-        run(main.handle_signup(join, ch.id, True))
-        labels = [b.label for b in join.response.sent[0][1]["view"].children]
-        assert labels == ["You're in", "Add my goals", "See who else is playing"]
+    db.join(ch.id, 901)
 
-        for n, (goal, days) in enumerate([("Yoga", 3), ("Affirmations", 7), ("7 hours of sleep", 7)], 1):
-            click = fake_inter(guild, 901)
-            run(main.handle_add_goal_button(click, ch.id))
-            kind, kw = click.response.sent[0]
-            form = kw["modal"]
-            assert kind == "modal" and form.title == f"Goal {n} of 3"
-            payload = form.to_dict()  # what Discord receives; fails here if the form is malformed
-            assert len(payload["components"]) == 2
-            form.goal = SimpleNamespace(value=goal)
-            form.days = SimpleNamespace(values=[str(days)])
-            done = fake_inter(guild, 901)
-            run(form.on_submit(done))
-            msg, kw = done.response.sent[0]
-            assert f"Added goal {n}" in msg
-            if n < 3:
-                assert kw["view"].children[0].label == f"Add goal {n + 1} of 3"
-            else:
-                assert "That's all 3" in msg and "view" not in kw or kw["view"] is discord.utils.MISSING
+    # Tapping Add my goals opens one form with 3 lines
+    click = fake_inter(guild, 901)
+    run(main.handle_goals_button(click, ch.id))
+    kind, kw = click.response.sent[0]
+    form = kw["modal"]
+    assert kind == "modal" and form.title == "Your 3 goals"
+    assert len(form.to_dict()["components"]) == 3  # what Discord receives; fails if malformed
 
-        full = fake_inter(guild, 901)
-        run(main.handle_add_goal_button(full, ch.id))
-        assert "all 3" in full.response.sent[0][0]
-        assert [g.target_days for g in db.goals(ch.id, 901)] == [3, 7, 7]
-    finally:
-        main.game.now_local = real_now
+    # One line is unclear: nothing is saved, and Fix my goals reopens with what she typed
+    bad = main.save_goals_from_form(ch, 901, ["Yoga, 3 days", "Sleep 7 hours", "Affirmations daily"])
+    assert "Nothing was saved" in bad["content"] and "Goal 2" in bad["content"] and "Goal 1" not in bad["content"]
+    assert bad["view"].children[0].label == "Fix my goals"
+    assert db.goals(ch.id, 901) == []
+    reopen = fake_inter(guild, 901)
+    run(main.handle_goals_button(reopen, ch.id))
+    assert [b.default for b in reopen.response.sent[0][1]["modal"].lines] == ["Yoga, 3 days", "Sleep 7 hours",
+                                                                             "Affirmations daily"]
+
+    # Fixed: all 3 saved together
+    ok = main.save_goals_from_form(ch, 901, ["Yoga, 3 days", "7 hours of sleep, 5 days", "Affirmations daily"])
+    assert ok["content"].startswith("Goals saved!") and "That's all 3" in ok["content"]
+    assert [(g.name, g.target_days) for g in db.goals(ch.id, 901)] == [
+        ("Yoga", 3), ("7 hours of sleep", 5), ("Affirmations", 7)]
+
+    # Editing later shows her saved goals, and saving replaces them
+    edit = fake_inter(guild, 901)
+    run(main.handle_goals_button(edit, ch.id))
+    assert [b.default for b in edit.response.sent[0][1]["modal"].lines] == [
+        "Yoga, 3 days", "7 hours of sleep, 5 days", "Affirmations, every day"]
+    main.save_goals_from_form(ch, 901, ["Pilates, 2 days", "7 hours of sleep, 5 days", "Affirmations daily"])
+    assert db.goals(ch.id, 901)[0].name == "Pilates" and len(db.goals(ch.id, 901)) == 3
+
+    # Locked once the challenge is running and goals are approved
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active")
+    locked = main.save_goals_from_form(db.get_challenge(ch.id), 901, ["A, 1", "B, 2", "C, 3"])
+    assert "locked in" in locked["content"]
