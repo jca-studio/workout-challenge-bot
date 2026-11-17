@@ -53,10 +53,10 @@ This loads the 59 mini missions from `data/missions.csv`. The commissioner role 
 
 | When | What to do |
 | --- | --- |
-| A week or so before | `/challenge open start:2026-12-01 end:2026-12-31` posts the sign-up with an **I'm in** button |
+| A week or so before | `/challenge open start:2026-12-01 end:2026-12-31 signup_deadline:2026-11-28` posts the sign-up with the full rules, the deadline, an **I'm in** button and a live list of who's in. The deadline is optional and defaults to the day before the start |
 | During sign-ups | Players tap **I'm in**, then `/goals set`. Check who's missing with `/challenge status` |
 | Before the start date | Review goals, then `/commish approve` (everyone) or `/commish approve member:@name` |
-| Optional | `/challenge lock` closes sign-ups early. Otherwise the bot locks them on the start date by itself |
+| At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
 | After the last day | At 9 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
@@ -129,7 +129,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 28 tests, including a simulated month
+python -m pytest                 # 32 tests, including a simulated month
 DISCORD_TOKEN=... python -m bot.main
 ```
 

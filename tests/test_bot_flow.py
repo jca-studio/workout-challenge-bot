@@ -290,3 +290,14 @@ def test_old_database_gets_deadline_column(tmp_path):
     assert d.current_challenge(1).signup_deadline is None
     c = d.create_challenge(2, "New", date(2027, 1, 1), date(2027, 1, 31), 1, signup_deadline=date(2026, 12, 30))
     assert c.signup_deadline == date(2026, 12, 30)
+
+
+def test_failed_signup_post_reports_permissions():
+    guild = FakeGuild()
+
+    async def refuse(*a, **kw):
+        raise discord.Forbidden(SimpleNamespace(status=403, reason="Missing Permissions"), "Missing Permissions")
+    guild.ann.send = refuse
+    ch = main.db.create_challenge(1, "June", date(2027, 6, 1), date(2027, 6, 30), 99)
+    err = asyncio.new_event_loop().run_until_complete(main.post_signup(guild, ch, guild.ann))
+    assert "Embed Links" in err

@@ -166,15 +166,44 @@ async def challenge_open(inter: discord.Interaction, start: str, end: str, signu
             return await deny(inter, "The sign-up deadline has to be between today and the start date.")
     else:
         dl = game.default_deadline(s, today)
+    await inter.response.defer(ephemeral=True)
     ch = db.create_challenge(inter.guild_id, name or f"{s.strftime('%B')} Challenge", s, e, inter.user.id, dl)
+    error = await post_signup(inter.guild, ch, ann)
+    if error:
+        db.update_challenge(ch.id, status="cancelled")  # don't leave a challenge with no sign-up post
+        return await inter.followup.send(error, ephemeral=True)
+    await inter.followup.send(f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
+
+
+async def post_signup(guild: discord.Guild, ch: Challenge, ann: discord.TextChannel) -> str | None:
+    """Send the sign-up post. Returns an error message if Discord refused."""
     view = make_view([
         discord.ui.Button(label="I'm in", style=discord.ButtonStyle.success, emoji="👑", custom_id=f"mb:join:{ch.id}"),
         discord.ui.Button(label="Leave", style=discord.ButtonStyle.secondary, custom_id=f"mb:leave:{ch.id}"),
     ])
-    msg = await ann.send(embed=signup_embed(inter.guild, ch), view=view)
+    try:
+        msg = await ann.send(embed=signup_embed(guild, ch), view=view)
+    except discord.Forbidden:
+        return (f"I couldn't post in {ann.mention}. In that channel's settings → Permissions, give my role "
+                "**View Channel, Send Messages, Embed Links** and **Read Message History**, then try again.")
+    except discord.HTTPException as err:
+        log.exception("sign-up post failed")
+        return f"Discord wouldn't take the sign-up post ({err.text or err.status}). Nothing was opened; try again."
     db.update_challenge(ch.id, signup_channel_id=ann.id, signup_message_id=msg.id)
-    await inter.response.send_message(
-        f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
+    return None
+
+
+@challenge_group.command(name="repost", description="Commissioner: post the sign-up again (if it got lost or deleted).")
+async def challenge_repost(inter: discord.Interaction):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    ann = channel(inter.guild, "announce_channel_id")
+    if not ch or ch.status != "signup" or not ann:
+        return await deny(inter, "There's no challenge taking sign-ups.")
+    await inter.response.defer(ephemeral=True)
+    error = await post_signup(inter.guild, ch, ann)
+    await inter.followup.send(error or f"Posted the sign-up again in {ann.mention}.", ephemeral=True)
 
 
 def hour_label(h: int) -> str:
