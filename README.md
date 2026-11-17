@@ -55,7 +55,7 @@ This loads the 59 mini missions from `data/missions.csv`. The commissioner role 
 | --- | --- |
 | A week or so before | `/challenge open start:2026-12-01 end:2026-12-31 signup_deadline:2026-11-28` posts the sign-up with the full rules, the deadline, an **I'm in** button and a live list of who's in. The deadline is optional and defaults to the day before the start |
 | During sign-ups | Players tap **I'm in**, then `/goals add` (once per goal). Check who's missing with `/challenge status` |
-| Before the start date | Review goals, then `/commish approve` (everyone) or `/commish approve member:@name` |
+| Before the start date | `/goals all` shows everyone's goals in one list. Tap **Approve all**, or approve one person with `/commish approve member:@name` |
 | At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
