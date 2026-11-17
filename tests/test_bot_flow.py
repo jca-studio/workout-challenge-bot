@@ -301,3 +301,59 @@ def test_failed_signup_post_reports_permissions():
     ch = main.db.create_challenge(1, "June", date(2027, 6, 1), date(2027, 6, 30), 99)
     err = asyncio.new_event_loop().run_until_complete(main.post_signup(guild, ch, guild.ann))
     assert "Embed Links" in err
+
+
+class FakeResponse:
+    def __init__(self):
+        self.sent = []
+
+    def is_done(self):
+        return bool(self.sent)
+
+    async def send_message(self, content=None, **kw):
+        self.sent.append((content, kw))
+
+
+def fake_inter(guild, uid):
+    return SimpleNamespace(user=SimpleNamespace(id=uid), guild=guild, guild_id=guild.id, response=FakeResponse())
+
+
+def test_im_in_reply_and_who_is_playing(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    ch = db.create_challenge(1, "July Challenge", date(2027, 7, 1), date(2027, 7, 31), 99,
+                             signup_deadline=date(2027, 6, 30))
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2027, 6, 20), 12))
+    run = asyncio.new_event_loop().run_until_complete
+
+    a = fake_inter(guild, 501)
+    run(main.handle_signup(a, ch.id, True))
+    msg, kw = a.response.sent[0]
+    buttons = kw["view"].children
+    assert msg.startswith("You're in!") and kw["ephemeral"]
+    assert buttons[0].disabled and buttons[0].label == "You're in"
+    assert buttons[1].label == "See who else is playing" and not buttons[1].disabled
+
+    again = fake_inter(guild, 501)
+    run(main.handle_signup(again, ch.id, True))
+    assert again.response.sent[0][0].startswith("You're already in")
+    assert again.response.sent[0][1]["view"].children[0].disabled
+
+    run(main.handle_signup(fake_inter(guild, 502), ch.id, True))
+    who = fake_inter(guild, 502)
+    run(main.handle_who(who, ch.id))
+    text = who.response.sent[0][0]
+    assert "2 playing" in text and "<@501>" in text and "<@502> (you)" in text
+
+    # after the deadline, I'm in is refused but the lineup still works
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2027, 7, 1), 1))
+    late = fake_inter(guild, 503)
+    run(main.handle_signup(late, ch.id, True))
+    assert "closed" in late.response.sent[0][0]
+    db.update_challenge(ch.id, mode="teams", status="ready")
+    db.set_team(ch.id, 501, config.TEAM_NAMES[0])
+    db.set_team(ch.id, 502, config.TEAM_NAMES[1])
+    who2 = fake_inter(guild, 503)
+    run(main.handle_who(who2, db.get_challenge(ch.id).id))
+    assert f"**{config.TEAM_NAMES[0]}** (1)" in who2.response.sent[0][0]

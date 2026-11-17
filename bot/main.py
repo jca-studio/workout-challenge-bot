@@ -175,10 +175,16 @@ async def challenge_open(inter: discord.Interaction, start: str, end: str, signu
     await inter.followup.send(f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
 
 
+def who_button(challenge_id: int, label: str = "See who's playing") -> discord.ui.Button:
+    return discord.ui.Button(label=label, style=discord.ButtonStyle.primary, emoji="👯‍♀️",
+                             custom_id=f"mb:who:{challenge_id}")
+
+
 async def post_signup(guild: discord.Guild, ch: Challenge, ann: discord.TextChannel) -> str | None:
     """Send the sign-up post. Returns an error message if Discord refused."""
     view = make_view([
         discord.ui.Button(label="I'm in", style=discord.ButtonStyle.success, emoji="👑", custom_id=f"mb:join:{ch.id}"),
+        who_button(ch.id),
         discord.ui.Button(label="Leave", style=discord.ButtonStyle.secondary, custom_id=f"mb:leave:{ch.id}"),
     ])
     try:
@@ -274,7 +280,7 @@ async def refresh_signup(guild: discord.Guild, ch: Challenge, closed: bool = Fal
     try:
         msg = await guild.get_channel(ch.signup_channel_id).fetch_message(ch.signup_message_id)
         if closed:
-            await msg.edit(embed=signup_embed(guild, ch, closed=True), view=None)
+            await msg.edit(embed=signup_embed(guild, ch, closed=True), view=make_view([who_button(ch.id)]))
         else:
             await msg.edit(embed=signup_embed(guild, ch))
     except Exception:
@@ -758,6 +764,8 @@ async def on_interaction(inter: discord.Interaction):
     try:
         if kind in ("join", "leave"):
             await handle_signup(inter, int(parts[2]), kind == "join")
+        elif kind == "who":
+            await handle_who(inter, int(parts[2]))
         elif kind == "p":
             await handle_proof_button(inter, int(parts[2]), parts[3], parts[4])
         elif kind in ("yes", "no"):
@@ -773,11 +781,45 @@ async def handle_signup(inter: discord.Interaction, challenge_id: int, join: boo
         return await deny(inter, "Sign-ups are closed. Catch the next one! 💕")
     changed = db.join(ch.id, inter.user.id) if join else db.leave(ch.id, inter.user.id)
     if join:
-        msg = ("You're in! 👑 Now set your 3 goals with `/goals set`." if changed else "You're already in.")
+        msg = ("You're in! 👑 Next, set your 3 goals with `/goals set`." if changed
+               else "You're already in! 👑 Set or change your goals anytime before the start with `/goals set`.")
+        view = make_view([
+            discord.ui.Button(label="You're in", emoji="✅", style=discord.ButtonStyle.success, disabled=True,
+                              custom_id=f"mb:noop:{ch.id}"),
+            who_button(ch.id, "See who else is playing"),
+        ])
+        await inter.response.send_message(msg, view=view, ephemeral=True)
     else:
-        msg = "You're out." if changed else "You weren't signed up."
-    await inter.response.send_message(msg, ephemeral=True)
-    await refresh_signup(inter.guild, ch)
+        await inter.response.send_message("You're out." if changed else "You weren't signed up.", ephemeral=True)
+    if changed:
+        await refresh_signup(inter.guild, ch)
+
+
+def lineup_text(ch: Challenge, viewer_id: int) -> str:
+    players = db.players(ch.id)
+    if not players:
+        return "Nobody's signed up yet. Be the first! 👑"
+
+    def name(uid: int) -> str:
+        return f"<@{uid}>" + (" (you)" if uid == viewer_id else "")
+
+    header = f"**{ch.name}: {len(players)} playing**"
+    teams = db.teams(ch.id)
+    if ch.mode == "teams" and teams:
+        blocks = []
+        for team in config.TEAM_NAMES:
+            members = [u for u, t in teams.items() if t == team]
+            blocks.append(f"**{team}** ({len(members)})\n" + "\n".join(name(u) for u in members))
+        return header + "\n\n" + "\n\n".join(blocks)
+    return header + "\n" + "\n".join(name(p["user_id"]) for p in players)
+
+
+async def handle_who(inter: discord.Interaction, challenge_id: int):
+    ch = db.get_challenge(challenge_id)
+    if not ch:
+        return await deny(inter, "I couldn't find that challenge.")
+    await inter.response.send_message(lineup_text(ch, inter.user.id)[:2000], ephemeral=True,
+                                      allowed_mentions=discord.AllowedMentions.none())
 
 
 async def handle_proof_button(inter: discord.Interaction, owner: int, what: str, ref: str):
