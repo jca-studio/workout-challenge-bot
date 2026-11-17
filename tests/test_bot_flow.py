@@ -1,0 +1,213 @@
+"""Runs the scheduled jobs for a whole month against fake Discord objects."""
+import asyncio
+import os
+import random
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+import discord
+
+os.environ["DATABASE_PATH"] = "/tmp/momsbot-test/flow.db"
+if os.path.exists(os.environ["DATABASE_PATH"]):
+    os.remove(os.environ["DATABASE_PATH"])
+
+from bot import config, game  # noqa: E402
+from bot import main  # noqa: E402
+
+CSV = (Path(__file__).parent.parent / "data" / "missions.csv").read_text()
+
+
+class FakeChannel:
+    def __init__(self, cid):
+        self.id = cid
+        self.sent = []
+        self.mention = f"<#{cid}>"
+
+    async def send(self, content=None, **kw):
+        self.sent.append((content, kw))
+        return SimpleNamespace(id=len(self.sent), jump_url="https://x")
+
+
+class FakeRole:
+    def __init__(self, name):
+        self.name, self.members, self.id = name, [], hash(name)
+
+
+class FakeMember:
+    def __init__(self, uid, guild):
+        self.id, self.guild = uid, guild
+        self.nick, self.global_name, self.name = None, f"Mom{uid}", f"mom{uid}"
+
+    async def edit(self, nick=None, reason=None):
+        if self.id == self.guild.owner_id:
+            raise discord.Forbidden(SimpleNamespace(status=403, reason="owner"), "owner")
+        self.nick = nick
+
+    async def add_roles(self, role, reason=None):
+        role.members.append(self)
+
+    async def remove_roles(self, role, reason=None):
+        role.members.remove(self)
+
+
+class FakeGuild:
+    def __init__(self):
+        self.id = 1
+        self.name = "Moms"
+        self.ann, self.proof = FakeChannel(10), FakeChannel(11)
+        self.roles = []
+        self.members = {}
+        self.owner_id = 777
+
+    def get_channel(self, cid):
+        return {10: self.ann, 11: self.proof}.get(cid)
+
+    async def create_role(self, name, **kw):
+        r = FakeRole(name)
+        self.roles.append(r)
+        return r
+
+    def get_member(self, uid):
+        return self.members.setdefault(uid, FakeMember(uid, self))
+
+    async def fetch_member(self, uid):
+        return self.get_member(uid)
+
+
+def at(d, h):
+    return datetime.combine(d, time(h, 5), tzinfo=config.TZ)
+
+
+def test_month_of_jobs(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    db.import_missions(1, CSV)
+    dms = []
+
+    class FakeUser:
+        def __init__(self, uid):
+            self.id = uid
+
+        async def send(self, content=None, **kw):
+            if self.id == 9:  # this player has DMs off
+                raise discord.Forbidden(SimpleNamespace(status=403, reason="no"), "closed")
+            dms.append((self.id, content))
+
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: FakeUser(uid))
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+
+    ch = db.create_challenge(1, "December Challenge", date(2026, 12, 1), date(2026, 12, 31), 99)
+    for uid in range(1, 10):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Work out", 3), ("Brush teeth", 7), ("Veggies", 7)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, mode="teams", status="ready")
+    teams = game.assign_teams(list(range(1, 10)), random.Random(4))
+    for uid, t in teams.items():
+        db.set_team(ch.id, uid, t)
+
+    rng = random.Random(5)
+    loop = asyncio.new_event_loop()
+    d = date(2026, 11, 30)
+    while d <= date(2027, 1, 1):
+        for hour in (6, 7, 9, 12, 20, 22):
+            ch = db.get_challenge(ch.id)
+            if hour == 12 and ch.status == "active" and ch.start <= d <= ch.end:
+                for uid in range(1, 9):  # player 9 never checks in -> gets reminders
+                    for g in game.open_goals_today(db, ch, uid, d):
+                        if uid <= 2 or rng.random() > 0.25:
+                            db.add_checkin(g.id, uid, d, None)
+            loop.run_until_complete(main.run_jobs(guild, ch, at(d, hour)))
+        d += timedelta(days=1)
+
+    ch = db.get_challenge(ch.id)
+    texts = [c or "" for c, _ in guild.ann.sent]
+    embeds = [kw.get("embed") for _, kw in guild.ann.sent if kw.get("embed")]
+    missions = [e for e in embeds if e.title.startswith("⚡")]
+    weekly = [e for e in embeds if "Week" in e.title]
+    assert ch.status == "finished"
+    assert any("starts now" in t for t in texts)
+    assert len(missions) == 31
+    assert [e.title for e in weekly] == [f"🏆 Week {n} standings" for n in (1, 2, 3, 4)]
+    assert any("Cue the fanfare" in t for t in texts)
+    assert any("<@9>" in t and "check in" in t for t in texts)  # DMs off -> channel ping
+    assert dms and all(uid != 9 for uid, _ in dms)
+    winner_role = next(r for r in guild.roles if r.name == config.WINNER_ROLE_NAME)
+    top_role = next(r for r in guild.roles if r.name == config.TOP_SCORER_ROLE_NAME)
+    assert {m.id for m in top_role.members} == {1, 2}  # tie shares the crown
+    assert {m.id for m in winner_role.members} <= set(range(1, 10)) and winner_role.members
+    # Jobs don't double-post when run again
+    n = len(guild.ann.sent)
+    loop.run_until_complete(main.run_jobs(guild, ch, at(date(2027, 1, 1), 22)))
+    assert len(guild.ann.sent) == n
+    # print the final standings text for a visual check
+    final = embeds[-1]
+    print("\n" + final.title)
+    for f in final.fields:
+        print(f.name, "\n", f.value)
+
+
+def test_checkin_messages_and_photo_rule(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    ch = db.create_challenge(1, "Jan", date(2027, 1, 2), date(2027, 1, 8), 99)  # one full Sat-Fri week
+    db.join(ch.id, 50)
+    db.set_goals(ch.id, 50, [("Work out", 2), ("Read", 7), ("Walk", 7)], False)
+    db.approve_goals(ch.id)
+    db.set_photo_required(ch.id, 50, 1, True)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    ch = db.get_challenge(ch.id)
+    user = SimpleNamespace(id=50)
+    g1, g2, _ = db.goals(ch.id, 50)
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2027, 1, 5), 21))
+    run = asyncio.new_event_loop().run_until_complete
+
+    msg = run(main.log_checkin(ch, user, g1, date(2027, 1, 5), None, guild))
+    assert "needs a photo" in msg
+    msg = run(main.log_checkin(ch, user, g1, date(2027, 1, 4), "https://proof", guild))
+    assert msg.startswith("Logged") and "✅⬜" in msg
+    msg = run(main.log_checkin(ch, user, g1, date(2027, 1, 5), "https://proof", guild))
+    assert "done for the week" in msg and "Perfect" not in msg
+    assert "already logged" in run(main.log_checkin(ch, user, g1, date(2027, 1, 5), "https://p", guild))
+    assert "hasn't happened" in run(main.log_checkin(ch, user, g2, date(2027, 1, 6), None, guild))
+
+
+def test_auto_lock_on_start_day(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    db.set_settings(1, 10, 11, None)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    ch = db.create_challenge(1, "Feb", date(2027, 2, 1), date(2027, 2, 28), 99)
+    for uid in range(100, 109):
+        db.join(ch.id, uid)
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, ch, at(date(2027, 1, 31), 9)))   # day before: nothing happens
+    assert db.get_challenge(ch.id).status == "signup"
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2027, 2, 1), 7)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and ch.mode == "teams"
+    assert len(set(db.teams(ch.id).values())) == 2
+    titles = [kw["embed"].title for _, kw in guild.ann.sent if kw.get("embed")]
+    assert titles[0].startswith("Sign-ups closed: 9 players, teams mode")
+    desc = guild.ann.sent[0][1]["embed"].description
+    assert "Still need goals" in desc
+
+
+def test_crowns_move_between_months():
+    db = main.db
+    guild = FakeGuild()
+    run = asyncio.new_event_loop().run_until_complete
+    guild.get_member(1).nick = "Jenna"
+    run(main.move_crowns(guild, winners=[1, 2, 777], top=[2], ann=guild.ann))
+    assert guild.get_member(1).nick == "👑 Jenna"
+    assert guild.get_member(2).nick == "👑💎 Mom2"
+    assert "server owner" in guild.ann.sent[-1][0]
+    # Next month: 2 wins again, 1 doesn't. 1 gets her name back; 2 keeps her real name under the new crown.
+    run(main.move_crowns(guild, winners=[2, 3], top=[3], ann=guild.ann))
+    assert guild.get_member(1).nick == "Jenna"
+    assert guild.get_member(2).nick == "👑 Mom2"
+    assert guild.get_member(3).nick == "👑💎 Mom3"
+    assert {r["user_id"] for r in db.crowns(guild.id)} == {2, 3}
