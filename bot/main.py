@@ -232,12 +232,12 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
         title=f"❤️✨ {ch.name} ✨❤️", color=PINK,
         description=(f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}**\n"
                      + ("🔒 **Sign-ups are closed.**" if closed else
-                        f"⏰ {deadline}\n\nTap **I'm in** below, then set your 3 goals with `/goals set`.")))
+                        f"⏰ {deadline}\n\nTap **I'm in** below, then add your 3 goals with `/goals add` (one at a time).")))
     photo = {"required": "A photo is required for every check-in.",
              "per_goal": "Some goals need a photo; the commissioner will let you know which.",
              }.get(config.PHOTO_MODE, "Photos aren't required, but they're encouraged. Show off! 📸")
     e.add_field(name="🎯 Goals", inline=False, value=(
-        "Set exactly **3 goals** with `/goals set`. Every goal is:\n"
+        "Add exactly **3 goals** with `/goals add`, one at a time. Every goal is:\n"
         "*I will ___ on ___ days per week* (1–7 days).\n"
         "\"Don't\" goals get flipped: \"only drink 1 day\" becomes **alcohol-free 6 days**. "
         "One check-in per goal per day. The commissioner approves goals before the start."))
@@ -269,7 +269,7 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
     players = db.players(ch.id)
     e.add_field(name=f"👯‍♀️ Signed up ({len(players)})", inline=False,
                 value=(" ".join(f"<@{p['user_id']}>" for p in players) or "Nobody yet. Be the first!")[:1024])
-    e.set_footer(text="Commands: /howtoplay · /goals set · /checkin · /mystats · /leaderboard")
+    e.set_footer(text="Commands: /howtoplay · /goals add · /checkin · /mystats · /leaderboard")
     return e
 
 
@@ -320,7 +320,7 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
         lines.append("Everyone plays for herself. Top scorer takes the crown. 👑")
     missing = [u for u in players if len(db.goals(ch.id, u)) < 3]
     if missing:
-        lines.append("Still need goals (`/goals set`): " + " ".join(f"<@{u}>" for u in missing))
+        lines.append("Still need goals (`/goals add`): " + " ".join(f"<@{u}>" for u in missing))
     unapproved = [u for u in players if any(not g.approved for g in db.goals(ch.id, u))]
     if unapproved:
         lines.append("Commissioner, these goals need approval (`/commish approve`): "
@@ -385,24 +385,66 @@ bot.tree.add_command(challenge_group)
 goals_group = app_commands.Group(name="goals", description="Your 3 goals")
 
 
-@goals_group.command(name="set", description="Set your 3 goals: I will __ on __ days per week.")
-@app_commands.describe(goal1="e.g. Work out", days1="Days per week (1-7)", goal2="e.g. Brush my teeth in the morning",
-                       days2="Days per week (1-7)", goal3="e.g. Alcohol-free (flip 'don't' goals to the days you hold the line)",
-                       days3="Days per week (1-7)")
-async def goals_set(inter: discord.Interaction, goal1: str, days1: app_commands.Range[int, 1, 7],
-                    goal2: str, days2: app_commands.Range[int, 1, 7], goal3: str, days3: app_commands.Range[int, 1, 7]):
+async def own_goal_choices(inter: discord.Interaction, current: str):
+    ch = db.current_challenge(inter.guild_id)
+    if not ch:
+        return []
+    return [app_commands.Choice(name=f"{g.slot}. {g.name} ({g.target_days} days/week)", value=g.slot)
+            for g in db.goals(ch.id, inter.user.id) if current.lower() in g.name.lower()][:25]
+
+
+DAY_CHOICES = [app_commands.Choice(name="1 day a week", value=1)] + [
+    app_commands.Choice(name=f"{n} days a week", value=n) for n in range(2, 7)] + [
+    app_commands.Choice(name="7 days a week (every day)", value=7)]
+
+
+def goals_summary(ch: Challenge, user_id: int) -> str:
+    gs = db.goals(ch.id, user_id)
+    lines = [f"{g.slot}. I will **{g.name}** on **{g.target_days}** day{'s' if g.target_days > 1 else ''} per week"
+             for g in gs]
+    if len(gs) < 3:
+        lines.append(f"*{3 - len(gs)} more to go: run `/goals add` again.*")
+    else:
+        lines.append("*That's all 3! 🎉 The commissioner will approve them before the start.*")
+    return "\n".join(lines)
+
+
+def goals_locked(ch: Challenge, user_id: int) -> bool:
+    gs = db.goals(ch.id, user_id)
+    return ch.status == "active" and len(gs) == 3 and all(g.approved for g in gs)
+
+
+@goals_group.command(name="add", description="Add one of your 3 goals: I will ___ on ___ days per week.")
+@app_commands.rename(days="how-many-days")
+@app_commands.describe(goal="What you'll do, e.g. Yoga, Affirmations, 7 hours of sleep, Alcohol-free",
+                       days="How many days per week")
+@app_commands.choices(days=DAY_CHOICES)
+async def goals_add(inter: discord.Interaction, goal: app_commands.Range[str, 1, 80], days: int):
     ch = db.current_challenge(inter.guild_id)
     if not ch:
         return await deny(inter, "No challenge running right now.")
     if not db.is_player(ch.id, inter.user.id):
         return await deny(inter, "Join the challenge first (the **I'm in** button on the sign-up post).")
-    existing = db.goals(ch.id, inter.user.id)
-    if ch.status == "active" and existing and all(g.approved for g in existing):
+    if goals_locked(ch, inter.user.id):
         return await deny(inter, "Your goals are locked in for this challenge. Ask the commissioner if something needs to change.")
-    goals = [(goal1, days1), (goal2, days2), (goal3, days3)]
-    db.set_goals(ch.id, inter.user.id, goals, photo_default=(config.PHOTO_MODE == "required"))
-    text = "\n".join(f"{i}. I will **{n.strip()}** on **{d}** day{'s' if d > 1 else ''} per week" for i, (n, d) in enumerate(goals, 1))
-    await inter.response.send_message(f"Got it:\n{text}\n\nThe commissioner will approve them before the challenge starts.",
+    slot = db.add_goal(ch.id, inter.user.id, goal, days, photo_default=(config.PHOTO_MODE == "required"))
+    if slot is None:
+        return await deny(inter, "You already have 3 goals. To swap one, remove it first with `/goals remove`.\n\n"
+                          + goals_summary(ch, inter.user.id))
+    await inter.response.send_message(f"Added goal {slot}! 💪🏾\n\n" + goals_summary(ch, inter.user.id), ephemeral=True)
+
+
+@goals_group.command(name="remove", description="Remove one of your goals so you can add a different one.")
+@app_commands.autocomplete(goal=own_goal_choices)
+async def goals_remove(inter: discord.Interaction, goal: int):
+    ch = db.current_challenge(inter.guild_id)
+    if not ch:
+        return await deny(inter, "No challenge running right now.")
+    if goals_locked(ch, inter.user.id):
+        return await deny(inter, "Your goals are locked in for this challenge. Ask the commissioner if something needs to change.")
+    if not db.remove_goal(ch.id, inter.user.id, goal):
+        return await deny(inter, "Pick one of your goals from the list.")
+    await inter.response.send_message("Removed. Add a new one with `/goals add`.\n\n" + goals_summary(ch, inter.user.id),
                                       ephemeral=True)
 
 
@@ -737,7 +779,7 @@ async def howtoplay(inter: discord.Interaction):
     proof = channel(inter.guild, "proof_channel_id")
     p = proof.mention if proof else "the proof channel"
     text = (
-        "**Goals.** Everyone sets 3: *I will __ on __ days per week* (`/goals set`).\n"
+        "**Goals.** Everyone sets 3: *I will __ on __ days per week*. Add them one at a time with `/goals add`.\n"
         "**Check in.** Post a photo in " + p + " and tap the goal, or use `/checkin`. "
         f"At {config.REMINDER_HOUR % 12 or 12} p.m. you'll get a reminder if you haven't checked in.\n"
         "**Points.** Each goal is worth up to 10 a week: 10 × days done ÷ target. "
@@ -871,8 +913,9 @@ async def handle_signup(inter: discord.Interaction, challenge_id: int, join: boo
         return await deny(inter, "Sign-ups are closed. Catch the next one! 💕")
     changed = db.join(ch.id, inter.user.id) if join else db.leave(ch.id, inter.user.id)
     if join:
-        msg = ("You're in! 👑 Next, set your 3 goals with `/goals set`." if changed
-               else "You're already in! 👑 Set or change your goals anytime before the start with `/goals set`.")
+        msg = ("You're in! 👑 Next, add your 3 goals with `/goals add`, one at a time." if changed
+               else "You're already in! 👑 Add or change your goals anytime before the start with `/goals add` "
+                    "and `/goals remove`.")
         view = make_view([
             discord.ui.Button(label="You're in", emoji="✅", style=discord.ButtonStyle.success, disabled=True,
                               custom_id=f"mb:noop:{ch.id}"),

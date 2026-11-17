@@ -233,6 +233,27 @@ class DB:
             self._x("INSERT INTO goals (challenge_id,user_id,slot,name,target_days,photo_required) VALUES (?,?,?,?,?,?)",
                     (challenge_id, user_id, slot, name.strip(), days, int(photo_default)))
 
+    def add_goal(self, challenge_id: int, user_id: int, name: str, days: int, photo_default: bool) -> int | None:
+        """Add one goal in the next open slot (1-3). Returns the slot, or None if she already has 3."""
+        used = {g.slot for g in self.goals(challenge_id, user_id)}
+        free = [n for n in (1, 2, 3) if n not in used]
+        if not free:
+            return None
+        self._x("INSERT INTO goals (challenge_id,user_id,slot,name,target_days,photo_required) VALUES (?,?,?,?,?,?)",
+                (challenge_id, user_id, free[0], name.strip(), days, int(photo_default)))
+        return free[0]
+
+    def remove_goal(self, challenge_id: int, user_id: int, slot: int) -> bool:
+        """Remove one goal and renumber the rest 1, 2, 3 so slots stay in order."""
+        g = next((x for x in self.goals(challenge_id, user_id) if x.slot == slot), None)
+        if not g:
+            return False
+        self._x("DELETE FROM checkins WHERE goal_id=?", (g.id,))
+        self._x("DELETE FROM goals WHERE id=?", (g.id,))
+        for new_slot, rest in enumerate(self.goals(challenge_id, user_id), start=1):
+            self._x("UPDATE goals SET slot=? WHERE id=?", (new_slot, rest.id))
+        return True
+
     def goals(self, challenge_id: int, user_id: int, approved_only: bool = False) -> list[Goal]:
         sql = "SELECT * FROM goals WHERE challenge_id=? AND user_id=?"
         if approved_only:

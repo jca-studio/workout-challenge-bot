@@ -403,3 +403,38 @@ def test_goals_all_splits_long_lists():
     assert len(pages) > 1 and sum(len(p) for p in pages) == len(embeds)
     assert all(sum(len(e) for e in p) <= 6000 and len(p) <= 10 for p in pages)
     assert all(len(e.description) <= 4096 for e in embeds)
+
+
+def test_goals_add_one_at_a_time_and_remove():
+    db = main.db
+    guild = FakeGuild()
+    ch = db.create_challenge(1, "Oct", date(2027, 10, 1), date(2027, 10, 31), 99)
+    db.join(ch.id, 801)
+    run = asyncio.new_event_loop().run_until_complete
+
+    def add(goal, days):
+        i = fake_inter(guild, 801)
+        run(main.goals_add.callback(i, goal, days))
+        return i.response.sent[0][0]
+
+    assert "2 more to go" in add("Yoga", 3) and "1 more to go" in add("Affirmations", 7)
+    last = add("7 hours of sleep", 7)
+    assert "That's all 3" in last and "I will **Yoga** on **3** days per week" in last
+    assert "already have 3" in add("Walk", 5)
+
+    rm = fake_inter(guild, 801)
+    run(main.goals_remove.callback(rm, 1))
+    assert [g.name for g in db.goals(ch.id, 801)] == ["Affirmations", "7 hours of sleep"]
+    assert [g.slot for g in db.goals(ch.id, 801)] == [1, 2]
+    assert "Added goal 3" in add("Walk", 5)
+
+    # once the challenge is running and her goals are approved, they're locked
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active")
+    rm2 = fake_inter(guild, 801)
+    run(main.goals_remove.callback(rm2, 1))
+    assert "locked in" in rm2.response.sent[0][0]
+
+    outsider = fake_inter(guild, 899)
+    run(main.goals_add.callback(outsider, "Run", 3))
+    assert "Join the challenge first" in outsider.response.sent[0][0]
