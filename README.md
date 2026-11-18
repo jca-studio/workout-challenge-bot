@@ -54,6 +54,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | When | What to do |
 | --- | --- |
 | A week or so before | `/challenge open start:2026-12-01 end:2026-12-31 signup_deadline:2026-11-28` posts the sign-up with the full rules, the deadline, an **I'm in** button and a live list of who's in. The deadline is optional and defaults to the day before the start |
+| Every day during sign-ups | At 10 a.m. the bot posts a reminder with a countdown, a link to the sign-up post, who's in, and who still needs goals (names show, nobody gets pinged). It stops when sign-ups close |
 | During sign-ups | Players tap **I'm in**, then **Add my goals**, which opens one form for all 3 goals, each written like "Yoga, 3 days" or "Affirmations, every day" (`/goals set` opens the same form). Check who's missing with `/challenge status` |
 | Before the start date | `/goals all` shows everyone's goals in one list. Tap **Approve all**, or approve one person with `/commish approve member:@name` |
 | At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
@@ -117,6 +118,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | `TIMEZONE` | `America/New_York` | e.g. `America/Los_Angeles` |
 | `REMINDER_HOUR` | `20` | 0–23 |
 | `ROUNDUP_HOUR` | `8` | 0–23, when the daily roundup posts |
+| `SIGNUP_REMINDER_HOUR` | `10` | 0–23, when the daily sign-up reminder posts |
 | `TEAM_NAMES` | `Bad Bitches,Muscle Mamis` | Two names, separated by a comma |
 | `WINNER_ROLE_NAME` / `TOP_SCORER_ROLE_NAME` | `Challenge Champion` / `That Girl` | Any role name |
 | `CROWN_NICKNAMES` | `true` | `false` turns the nickname crowns off |

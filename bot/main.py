@@ -184,6 +184,7 @@ async def challenge_open(inter: discord.Interaction, start: str, end: str, signu
     if error:
         db.update_challenge(ch.id, status="cancelled")  # don't leave a challenge with no sign-up post
         return await inter.followup.send(error, ephemeral=True)
+    db.mark_job(ch.id, "signup_reminder", today.isoformat())  # the post itself is today's reminder
     await inter.followup.send(f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
 
 
@@ -222,6 +223,32 @@ async def challenge_repost(inter: discord.Interaction):
     await inter.response.defer(ephemeral=True)
     error = await post_signup(inter.guild, ch, ann)
     await inter.followup.send(error or f"Posted the sign-up again in {ann.mention}.", ephemeral=True)
+
+
+def signup_reminder_text(guild: discord.Guild, ch: Challenge, today: date) -> str:
+    """Daily nudge while sign-ups are open: countdown, a link to the sign-up post, and who's in."""
+    tz = tz_label()
+    last_day = ch.signup_deadline or (ch.start - timedelta(days=1))
+    days_left = (last_day - today).days
+    if days_left <= 0:
+        when = f"⏰ **Last day to sign up for {ch.name}!** Sign-ups close tonight at 11:59 p.m. {tz}."
+    elif days_left == 1:
+        when = f"⏰ **One more day to sign up for {ch.name}!** Sign-ups close tomorrow night ({pretty(last_day)})."
+    else:
+        when = f"⏰ **{days_left} days left to sign up for {ch.name}!** Sign-ups close {pretty(last_day)} at 11:59 p.m. {tz}."
+    link = (f"https://discord.com/channels/{guild.id}/{ch.signup_channel_id}/{ch.signup_message_id}"
+            if ch.signup_message_id else None)
+    players = db.players(ch.id)
+    lines = [when,
+             f"👉 Tap **I'm in** on the sign-up post{f': {link}' if link else ''}",
+             f"👯‍♀️ **{len(players)} signed up so far**"
+             + (": " + " ".join(f"<@{p['user_id']}>" for p in players) if players else ". Be the first! 👑")]
+    missing = [p["user_id"] for p in players if len(db.goals(ch.id, p["user_id"])) < 3]
+    if missing:
+        lines.append("📝 Still need to set goals (tap **I'm in** again, then **Add my goals**): "
+                     + " ".join(f"<@{u}>" for u in missing))
+    lines.append(f"The challenge starts {pretty(ch.start)}. 💪🏾")
+    return "\n".join(lines)
 
 
 def hour_label(h: int) -> str:
@@ -1171,6 +1198,12 @@ async def scheduler():
 async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     ann = channel(guild, "announce_channel_id")
     today = now.date()
+    if (ch.status == "signup" and game.signups_open(ch, now) and now.hour >= config.SIGNUP_REMINDER_HOUR
+            and not db.job_done(ch.id, "signup_reminder", today.isoformat())):
+        db.mark_job(ch.id, "signup_reminder", today.isoformat())
+        if ann:
+            await ann.send(signup_reminder_text(guild, ch, today), allowed_mentions=discord.AllowedMentions.none())
+
     if game.should_lock(ch, now):
         if len(db.players(ch.id)) < 2:
             # Not enough players: keep sign-ups open (drop the deadline) instead of shutting everyone out.

@@ -523,3 +523,33 @@ def test_rules_text_has_no_blank_underscores():
     ch = main.db.create_challenge(1, "Dec", date(2027, 12, 1), date(2027, 12, 31), 99)
     e = main.signup_embed(guild, ch)
     assert "__" not in e.fields[0].value and "[goal]" in e.fields[0].value
+
+
+def test_daily_signup_reminder_until_signups_close(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 77
+    db.set_settings(77, 10, 11, None)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    ch = db.create_challenge(77, "January Challenge", date(2028, 1, 1), date(2028, 1, 31), 99,
+                             signup_deadline=date(2027, 12, 31))
+    db.update_challenge(ch.id, signup_channel_id=10, signup_message_id=555)
+    for uid in (1001, 1002):
+        db.join(ch.id, uid)
+    db.set_goals(ch.id, 1001, [("Yoga", 3), ("Read", 5), ("Walk", 7)], False)
+    run = asyncio.new_event_loop().run_until_complete
+    d = date(2027, 12, 26)
+    while d <= date(2028, 1, 1):
+        for hour in (9, 10, 15):
+            run(main.run_jobs(guild, db.get_challenge(ch.id), at(d, hour)))
+        d += timedelta(days=1)
+    reminders = [(c, kw) for c, kw in guild.ann.sent if c and "sign up" in c.lower() and "⏰" in c]
+    assert len(reminders) == 6  # Dec 26-31, once a day, none after sign-ups close
+    first, last = reminders[0][0], reminders[-1][0]
+    assert first.startswith("⏰ **5 days left to sign up for January Challenge!**")
+    assert "https://discord.com/channels/77/10/555" in first and "2 signed up so far" in first
+    assert "Still need to set goals" in first and "<@1002>" in first.split("Still need")[1]
+    assert "<@1001>" not in first.split("Still need")[1]
+    assert last.startswith("⏰ **Last day to sign up for January Challenge!**")
+    assert all(kw["allowed_mentions"].users is False for _, kw in reminders)  # names show, nobody gets pinged
+    assert db.get_challenge(ch.id).status == "active"
