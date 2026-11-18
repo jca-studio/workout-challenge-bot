@@ -55,13 +55,13 @@ class FakeGuild:
     def __init__(self):
         self.id = 1
         self.name = "Moms"
-        self.ann, self.proof = FakeChannel(10), FakeChannel(11)
+        self.ann, self.proof, self.missions = FakeChannel(10), FakeChannel(11), FakeChannel(12)
         self.roles = []
         self.members = {}
         self.owner_id = 777
 
     def get_channel(self, cid):
-        return {10: self.ann, 11: self.proof}.get(cid)
+        return {10: self.ann, 11: self.proof, 12: self.missions}.get(cid)
 
     async def create_role(self, name, **kw):
         r = FakeRole(name)
@@ -82,7 +82,7 @@ def at(d, h):
 def test_month_of_jobs(monkeypatch):
     db = main.db
     guild = FakeGuild()
-    db.set_settings(1, 10, 11, None)
+    db.set_settings(1, 10, 11, None, mission=12)
     db.import_missions(1, CSV)
     dms = []
 
@@ -125,12 +125,26 @@ def test_month_of_jobs(monkeypatch):
     ch = db.get_challenge(ch.id)
     texts = [c or "" for c, _ in guild.ann.sent]
     embeds = [kw.get("embed") for _, kw in guild.ann.sent if kw.get("embed")]
-    missions = [e for e in embeds if e.title.startswith("⚡")]
-    weekly = [e for e in embeds if "Week" in e.title]
+    roundups = [kw["embeds"] for _, kw in guild.ann.sent if kw.get("embeds")]
+    missions = [kw["embed"] for _, kw in guild.missions.sent]
     assert ch.status == "finished"
     assert any("starts now" in t for t in texts)
-    assert len(missions) == 31
-    assert [e.title for e in weekly] == [f"🏆 Week {n} standings" for n in (1, 2, 3, 4)]
+    # 31 missions, all in the mini mission channel, none in the announce channel
+    assert len(missions) == 31 and all(e.title.startswith("⚡") for e in missions)
+    assert not any(e.title.startswith("⚡") for e in embeds)
+    # a roundup every morning from Dec 2 to Dec 31 (Jan 1 gets the final crowning instead)
+    assert len(roundups) == 30
+    finals = [r[0].title for r in roundups if "final" in r[0].title]
+    assert [t.split(" (")[0] for t in finals] == [f"🏆 Week {n} final" for n in (1, 2, 3, 4)]
+    first = roundups[0]
+    assert first[0].title == "☀️ Daily roundup: Tue Dec 1" and first[1].title == "Week 1 so far"
+    # Dec 1 is a 4-day week: "every day" shrinks to 4 and "3 days" to 2
+    assert "**<@1>** · " in first[1].description and "Work out ✅⬜ · Brush teeth ✅⬜⬜⬜" in first[1].description
+    assert "**<@9>** · 0 pts\nWork out ⬜⬜ · Brush teeth ⬜⬜⬜⬜ · Veggies ⬜⬜⬜⬜" in first[1].description
+    week_end = next(r for r in roundups if r[0].title.startswith("🏆 Week 2 final"))
+    assert ("**<@1>** · 4 pts ✨\nWork out ✅✅✅ · Brush teeth ✅✅✅✅✅✅✅ · Veggies ✅✅✅✅✅✅✅"
+            in week_end[1].description)  # perfect: 3 goals + bonus
+    print("\n" + week_end[0].title + "\n" + week_end[0].fields[-1].value + "\n\n" + week_end[1].description)
     assert any("Cue the fanfare" in t for t in texts)
     assert any("<@9>" in t and "check in" in t for t in texts)  # DMs off -> channel ping
     assert dms and all(uid != 9 for uid, _ in dms)

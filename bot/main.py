@@ -26,6 +26,9 @@ os.makedirs(os.path.dirname(config.DATABASE_PATH) or ".", exist_ok=True)
 db = DB(config.DATABASE_PATH)
 
 
+BUILT_IN_MISSIONS = os.path.join(os.path.dirname(__file__), "..", "data", "missions.csv")
+
+
 # ---------- helpers ----------
 
 def is_commish(inter: discord.Interaction) -> bool:
@@ -115,23 +118,31 @@ async def log_checkin(ch: Challenge, user: discord.abc.User, goal: Goal, day: da
 # ---------- setup ----------
 
 @bot.tree.command(description="Admins: set the channels the bot uses.")
-@app_commands.describe(announce_channel="Where sign-ups, missions and standings go",
+@app_commands.describe(announce_channel="Where sign-ups, daily roundups and standings go",
                        proof_channel="Where people post photos",
+                       mission_channel="Where the daily mini mission is announced (optional; default: announce channel)",
                        commissioner_role="Role that can run the challenge (optional)")
 @app_commands.default_permissions(manage_guild=True)
 async def setup(inter: discord.Interaction, announce_channel: discord.TextChannel,
-                proof_channel: discord.TextChannel, commissioner_role: discord.Role | None = None):
-    db.set_settings(inter.guild_id, announce_channel.id, proof_channel.id, commissioner_role.id if commissioner_role else None)
+                proof_channel: discord.TextChannel, mission_channel: discord.TextChannel | None = None,
+                commissioner_role: discord.Role | None = None):
+    db.set_settings(inter.guild_id, announce_channel.id, proof_channel.id,
+                    commissioner_role.id if commissioner_role else None,
+                    mission_channel.id if mission_channel else None)
     has_missions = len(db.missions(inter.guild_id))
     if not has_missions:
-        path = os.path.join(os.path.dirname(__file__), "..", "data", "missions.csv")
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                has_missions = db.import_missions(inter.guild_id, f.read())
+        with open(BUILT_IN_MISSIONS, encoding="utf-8") as f:
+            has_missions = db.import_missions(inter.guild_id, f.read())
+    missions_in = mission_channel or announce_channel
     await inter.response.send_message(
-        f"Set. Announcements in {announce_channel.mention}, proof in {proof_channel.mention}"
+        f"Set. Sign-ups and roundups in {announce_channel.mention}, proof in {proof_channel.mention}, "
+        f"mini missions in {missions_in.mention}"
         + (f", commissioners: {commissioner_role.mention}" if commissioner_role else "")
         + f". {has_missions} mini missions loaded.", ephemeral=True)
+
+
+def mission_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    return channel(guild, "mission_channel_id") or channel(guild, "announce_channel_id")
 
 
 # ---------- challenge ----------
@@ -256,14 +267,17 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
         f"point{'' if config.PERFECT_WEEK_BONUS == 1 else 's'}**.\n"
         "**Team bonus:** if every teammate has a perfect week, the team gets **+1 point per player** that week."))
     e.add_field(name="⚡ Mini missions", inline=False, value=(
-        f"A new one posts every morning at {hour_label(config.MISSION_POST_HOUR)} {tz}. "
+        f"A new one posts every morning at {hour_label(config.MISSION_POST_HOUR)} {tz}"
+        + (f" in {mission_channel(guild).mention}. " if mission_channel(guild) else ". ")
+        + 
         "Worth **0.25** (easy) or **0.5** (harder) points, and you have 24 hours to do it. "
         + (f"Up to **{fmt(config.MISSION_WEEKLY_CAP)} points a week**. " if config.MISSION_WEEKLY_CAP > 0
            else "Do them every day to stack up points! ")
         + "They don't count toward a perfect week."))
     e.add_field(name="🍑 Weekly schedule", inline=False, value=(
         f"Weeks run **Saturday–Friday**. You can log any day of the current week until **Friday at midnight {tz}**, "
-        f"then that week locks. Standings post **Saturday at {hour_label(config.STANDINGS_HOUR)} {tz}**. "
+        f"then that week locks. Every morning at {hour_label(config.ROUNDUP_HOUR)} {tz}, a **daily roundup** "
+        "shows the leaderboard and everyone's ✅ progress on each goal. Saturday's roundup is the week's final standings. "
         "Short weeks at the start or end of the challenge shrink your targets to fit."))
     crown = (f" and a {config.WINNER_EMOJI} / {config.TOP_SCORER_EMOJI} on their name until the next challenge"
              if config.CROWN_NICKNAMES else "")
@@ -714,7 +728,9 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild or not message.attachments:
         return
     s = db.settings(message.guild.id)
-    if not s or message.channel.id != s["proof_channel_id"]:
+    in_proof = s and message.channel.id == s["proof_channel_id"]
+    in_missions = s and s["mission_channel_id"] and message.channel.id == s["mission_channel_id"]
+    if not (in_proof or in_missions):
         return
     ch = db.current_challenge(message.guild.id)
     if not ch or ch.status != "active" or not db.is_player(ch.id, message.author.id):
@@ -722,7 +738,7 @@ async def on_message(message: discord.Message):
     now = game.now_local()
     buttons = [discord.ui.Button(label=g.name[:80], emoji="✅", style=discord.ButtonStyle.primary,
                                  custom_id=f"mb:p:{message.author.id}:g:{g.id}")
-               for g in game.open_goals_today(db, ch, message.author.id, now.date())]
+               for g in game.open_goals_today(db, ch, message.author.id, now.date())] if in_proof else []
     m = game.open_mission(db, ch, now)
     done_days = {d for d, _ in db.mission_completions(ch.id, message.author.id)}
     if m and date.fromisoformat(m["day"]) not in done_days:
@@ -803,9 +819,6 @@ async def missions_import(inter: discord.Interaction, file: discord.Attachment):
     await inter.response.send_message(f"Loaded {n} mini missions.", ephemeral=True)
 
 
-BUILT_IN_MISSIONS = os.path.join(os.path.dirname(__file__), "..", "data", "missions.csv")
-
-
 @missions_group.command(name="reset", description="Reload the built-in mission bank (replaces the current one).")
 async def missions_reset(inter: discord.Interaction):
     if not is_commish(inter):
@@ -855,6 +868,32 @@ async def mystats(inter: discord.Interaction):
     await inter.response.send_message(embed=e, ephemeral=True)
 
 
+def roundup_embeds(ch: Challenge, day: date) -> list[discord.Embed]:
+    """Yesterday's roundup: the leaderboard, plus each player's progress on each goal this week
+    (✅ for each day she hit it, ⬜ for days still to go)."""
+    weeks = challenge_weeks(ch.start, ch.end)
+    week = week_for(day, weeks)
+    s = game.standings(db, ch, week.number)
+    week_over = day == week.end
+    title = (f"🏆 Week {week.number} final ({pretty(week.start)} – {pretty(week.end)})" if week_over
+             else f"☀️ Daily roundup: {pretty(day)}")
+    board = standings_embed(ch, week.number, title)
+    rows = []
+    for uid, pws in s.player_weeks.items():
+        pw = pws[-1]
+        star = " ✨" if pw.perfect else ""
+        goals = " · ".join(f"{g.name[:22]} {progress_bar(g.days_done, g.target)}" for g in pw.goals) or "no goals yet"
+        rows.append((pw.points, f"**<@{uid}>** · {fmt(pw.points)} pts{star}\n{goals}"))
+    rows.sort(key=lambda r: -r[0])
+    text = "✅ = a day she hit that goal · ⬜ = days still to go this week\n\n" + "\n\n".join(r[1] for r in rows)
+    week_e = discord.Embed(
+        title=f"Week {week.number} so far" if not week_over else f"Week {week.number} goals",
+        description=text[:4096] if rows else "Nobody's playing yet.", color=GOLD)
+    week_e.set_footer(text="Week points include partial credit and the perfect week bonus ✨"
+                      + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
+    return [board, week_e]
+
+
 def standings_embed(ch: Challenge, through_week: int | None, title: str) -> discord.Embed:
     s = game.standings(db, ch, through_week)
     e = discord.Embed(title=title, color=PINK)
@@ -899,7 +938,8 @@ async def howtoplay(inter: discord.Interaction):
         "**Mini missions.** One posts every morning. 0.25 or 0.5 points, 24 hours to do it"
         + (f", up to {fmt(config.MISSION_WEEKLY_CAP)} points a week.\n" if config.MISSION_WEEKLY_CAP > 0
            else ". Do them every day to stack up points.\n")
-        + "**Deadlines.** Weeks run Saturday–Friday and lock Friday at midnight. Standings post Saturday morning.\n"
+        + "**Deadlines.** Weeks run Saturday–Friday and lock Friday at midnight. A daily roundup with the "
+        "leaderboard posts every morning; Saturday's is the week's final.\n"
         "`/mystats` for your week, `/leaderboard` for everyone."
     )
     await inter.response.send_message(text, ephemeral=True)
@@ -1162,22 +1202,22 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
         m = game.pick_mission(db, ch, today)
         if m:
             db.set_daily_mission(ch.id, today, m["id"], now)
-            if ann:
-                await ann.send(embed=mission_embed(db.daily_mission(ch.id, today)))
+            where = mission_channel(guild)
+            if where:
+                await where.send(f"☀️ **Today's mini mission** ({pretty(today)})",
+                                 embed=mission_embed(db.daily_mission(ch.id, today)))
         db.mark_job(ch.id, "mission", key)
 
     if in_range and now.hour >= config.REMINDER_HOUR and not db.job_done(ch.id, "reminder", key):
         db.mark_job(ch.id, "reminder", key)
         await send_reminders(guild, ch, today)
 
-    weeks = challenge_weeks(ch.start, ch.end)
-    for w in weeks[:-1]:
-        lock = game.lock_time(w)
-        if now >= lock and (now.date() > lock.date() or now.hour >= config.STANDINGS_HOUR) \
-                and not db.job_done(ch.id, "standings", str(w.number)):
-            db.mark_job(ch.id, "standings", str(w.number))
-            if ann:
-                await ann.send(embed=standings_embed(ch, w.number, f"🏆 Week {w.number} standings"))
+    # Daily roundup of yesterday. The morning after a week ends, it doubles as that week's final standings.
+    # (The morning after the last day, the final crowning post covers it instead.)
+    if ch.start < today <= ch.end and now.hour >= config.ROUNDUP_HOUR and not db.job_done(ch.id, "roundup", key):
+        db.mark_job(ch.id, "roundup", key)
+        if ann:
+            await ann.send(embeds=roundup_embeds(ch, today - timedelta(days=1)))
 
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")

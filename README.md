@@ -42,10 +42,10 @@ Create a private repo and upload this folder.
 In Discord, an admin runs:
 
 ```
-/setup announce_channel:#challenge proof_channel:#proof commissioner_role:@Commissioner
+/setup announce_channel:#challenge proof_channel:#proof mission_channel:#mini-missions commissioner_role:@Commissioner
 ```
 
-This loads the 59 mini missions from `data/missions.csv`. The commissioner role is optional: anyone with Manage Server can already run commissioner commands.
+This loads the 59 mini missions from `data/missions.csv`. The mission channel is optional; without it, missions post in the announce channel. The commissioner role is optional: anyone with Manage Server can already run commissioner commands.
 
 ---
 
@@ -65,10 +65,10 @@ This loads the 59 mini missions from `data/missions.csv`. The commissioner role 
 
 ### What the bot does on its own each day (Eastern time by default)
 
-- **7 a.m.:** posts the day's mini mission, from that day's theme. About once a week it's a Random Mix-Up mission instead.
+- **7 a.m.:** posts the day's mini mission in the mission channel, from that day's theme. About once a week it's a Random Mix-Up mission instead. Photos posted in the mission channel get a "Today's mini mission" button.
+- **8 a.m.:** posts a daily roundup of yesterday in the announce channel: the leaderboard, plus each player's progress on each goal this week (✅ for each day she hit it, ⬜ for days still to go). Saturday's roundup is the week's final standings.
 - **8 p.m.:** sends a DM reminder to anyone who hasn't checked in that day, with a button for each goal. Players with DMs off get pinged in the announce channel.
 - **Friday at midnight:** the week locks.
-- **Saturday at 9 a.m.:** posts the weekly standings.
 
 ---
 
@@ -116,6 +116,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | `TEAM_SCORE_AVERAGE` | `true` | `false` compares team totals instead of averages |
 | `TIMEZONE` | `America/New_York` | e.g. `America/Los_Angeles` |
 | `REMINDER_HOUR` | `20` | 0–23 |
+| `ROUNDUP_HOUR` | `8` | 0–23, when the daily roundup posts |
 | `TEAM_NAMES` | `Bad Bitches,Muscle Mamis` | Two names, separated by a comma |
 | `WINNER_ROLE_NAME` / `TOP_SCORER_ROLE_NAME` | `Challenge Champion` / `That Girl` | Any role name |
 | `CROWN_NICKNAMES` | `true` | `false` turns the nickname crowns off |

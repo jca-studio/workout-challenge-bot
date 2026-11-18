@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id INTEGER PRIMARY KEY,
     announce_channel_id INTEGER,
     proof_channel_id INTEGER,
-    commissioner_role_id INTEGER
+    commissioner_role_id INTEGER,
+    mission_channel_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS challenges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +143,9 @@ class DB:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(challenges)")}
         if "signup_deadline" not in cols:
             self.conn.execute("ALTER TABLE challenges ADD COLUMN signup_deadline TEXT")
+        gcols = {r[1] for r in self.conn.execute("PRAGMA table_info(guild_settings)")}
+        if "mission_channel_id" not in gcols:
+            self.conn.execute("ALTER TABLE guild_settings ADD COLUMN mission_channel_id INTEGER")
         self.conn.commit()
 
     def _x(self, sql: str, args: tuple = ()) -> sqlite3.Cursor:
@@ -150,12 +154,14 @@ class DB:
         return cur
 
     # ---- settings ----
-    def set_settings(self, guild_id: int, announce: int, proof: int, commissioner_role: int | None):
+    def set_settings(self, guild_id: int, announce: int, proof: int, commissioner_role: int | None,
+                     mission: int | None = None):
         self._x(
-            "INSERT INTO guild_settings VALUES (?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET "
+            "INSERT INTO guild_settings (guild_id,announce_channel_id,proof_channel_id,commissioner_role_id,"
+            "mission_channel_id) VALUES (?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET "
             "announce_channel_id=excluded.announce_channel_id, proof_channel_id=excluded.proof_channel_id, "
-            "commissioner_role_id=excluded.commissioner_role_id",
-            (guild_id, announce, proof, commissioner_role),
+            "commissioner_role_id=excluded.commissioner_role_id, mission_channel_id=excluded.mission_channel_id",
+            (guild_id, announce, proof, commissioner_role, mission),
         )
 
     def settings(self, guild_id: int) -> sqlite3.Row | None:

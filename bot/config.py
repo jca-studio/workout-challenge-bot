@@ -15,7 +15,8 @@ TZ = ZoneInfo(_env("TIMEZONE", "America/New_York"))
 
 REMINDER_HOUR = int(_env("REMINDER_HOUR", "20"))          # 8 p.m. reminder if you haven't checked in
 MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "7"))    # daily mini mission
-STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "9"))          # Saturday standings
+STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "9"))          # final standings after the last day
+ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "8"))              # daily roundup of yesterday
 MISSION_WINDOW_HOURS = int(_env("MISSION_WINDOW_HOURS", "24"))
 
 TEAM_MODE_MIN_PLAYERS = int(_env("TEAM_MODE_MIN_PLAYERS", "8"))
