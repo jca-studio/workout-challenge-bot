@@ -27,7 +27,7 @@ TEAM_SCORE_AVERAGE = _env("TEAM_SCORE_AVERAGE", "true").lower() == "true"
 # (optional by default; the commissioner turns it on goal by goal with /commish photo).
 PHOTO_MODE = _env("PHOTO_MODE", "optional")
 
-MISSION_CAP = float(_env("MISSION_CAP", "20"))
+MISSION_WEEKLY_CAP = float(_env("MISSION_WEEKLY_CAP", "1"))  # most mini mission points per player per week
 MIXUP_CHANCE = float(_env("MIXUP_CHANCE", "0.15"))  # about once a week
 
 WINNER_ROLE_NAME = _env("WINNER_ROLE_NAME", "Challenge Champion")

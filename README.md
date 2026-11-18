@@ -85,15 +85,15 @@ This loads the 59 mini missions from `data/missions.csv`. The commissioner role 
 
 ---
 
-## Scoring (matches the rules doc)
+## Scoring (matches the Game Rules doc)
 
-- **Goal points:** each goal is worth up to 10 points a week (10 × days done ÷ target, capped at 10). Everyone has 3 goals, so the max is 30 a week.
-- **Perfect week:** every goal hits its target, so the week's goal points × 1.5.
-- **Team bonus:** every player on a team has a perfect week, so the team's goal points for that week get +25%. Individual multipliers apply first.
-- **Mini missions:** 0.5 to 2 points each, open for 24 hours, capped at 20 points per player for the month. They're added after multipliers.
+- **Goal points:** each goal is worth up to **1 point a week**. Hit your target for the full point, or get the share you hit (2 of 3 workouts = 0.67). Going past the target earns nothing extra. Everyone has 3 goals, so the max is 3 a week.
+- **Perfect week:** hit all 3 goals and you get **+1 bonus point**, for a max of 4 a week.
+- **Team bonus:** every player on a team has a perfect week, so the team gets **+1 point per player** that week.
+- **Mini missions:** 0.25 (easy) or 0.5 (harder), open for 24 hours, capped at **1 point per player per week**. They never count toward a perfect week.
 - **Partial weeks:** in a short week at the start or end of the month, targets shrink to fit, rounding up.
 - **Team scores:** compared by average per player, so a team with one extra player can't win on headcount.
-- **Ties:** players tied at the top share the Top Scorer role.
+- **Ties:** players or teams tied at the top share the win.
 
 ## Crowns
 
@@ -111,6 +111,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | --- | --- | --- |
 | `PHOTO_MODE` | `optional` | `optional` (encouraged, never required), `required` (every goal), `per_goal` (the commissioner picks with `/commish photo`) |
 | `TEAM_MODE_MIN_PLAYERS` | `8` | Any number |
+| `MISSION_WEEKLY_CAP` | `1` | Most mini mission points per player per week |
 | `TEAM_SCORE_AVERAGE` | `true` | `false` compares team totals instead of averages |
 | `TIMEZONE` | `America/New_York` | e.g. `America/Los_Angeles` |
 | `REMINDER_HOUR` | `20` | 0–23 |
@@ -123,7 +124,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 1. Edit the Mini Mission Bank sheet and download it as CSV. It needs the columns Day, Mission and Points.
 2. Run `/missions import` and attach the file. This replaces the whole bank.
-3. To add a single mission, use `/missions add`. `/missions count` shows how many each day has.
+3. To add a single mission, use `/missions add`. To go back to the built-in list, use `/missions reset`. `/missions count` shows how many each day has.
 
 ## For whoever maintains the code
 

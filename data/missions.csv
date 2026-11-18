@@ -1,60 +1,60 @@
 day,mission,points,effort,proof
-Munchie Monday,Prep a healthy snack or meal for the week,1.5,Hard,Photo
-Munchie Monday,Share a healthy recipe (bonus: 1 point total if you make it and post a photo),0.5,Quick,Post the recipe
-Munchie Monday,Eat a vegetable at every meal (snacks don't count),1.5,Hard,Photos
-Munchie Monday,Eat home-cooked meals all day,2,All day,Photos
-Munchie Monday,Try a new home-cooked meal,1,Standard,Photo
-Munchie Monday,Set your fork down after every bite for one meal,0.5,Quick,Check-in
-Munchie Monday,Eat 25 g of fiber,1.5,Hard,Food log screenshot
-Munchie Monday,Drink 100 oz of water (soda and coffee don't count),1.5,All day,Photo or app screenshot
-Munchie Monday,No caffeine after 2 p.m.,1,Standard,Check-in
-Munchie Monday,Put your devices away during every meal,1,Standard,Check-in
-Thoughtful Tuesday,Share an accomplishment from this year,0.5,Quick,Post
-Thoughtful Tuesday,Reach out to an old friend or family member you've been meaning to check on,1,Standard,Check-in
-Thoughtful Tuesday,Give 3 people a compliment,0.5,Quick,Check-in
-Thoughtful Tuesday,Do something nice for someone else,1,Standard,Photo or check-in
-Thoughtful Tuesday,Share a song that motivates you to reach your goals,0.5,Quick,Post the song
-Thoughtful Tuesday,"Write a reflection: what went well today, what could have gone better, what's left undone",0.5,Quick,Post or photo
-Thoughtful Tuesday,"Spend an hour with your partner, both off your phones",1,Standard,Check-in
-Work It Wednesday,Spell-your-name workout,1.5,Hard,Photo or video
-Work It Wednesday,Walk outside for 20 minutes,1,Standard,Watch screenshot
-Work It Wednesday,20 push-ups,1,Hard,Video or check-in
-Work It Wednesday,5-minute plank,2,Very hard,Watch screenshot
-Work It Wednesday,50 squats,1,Standard,Video or check-in
-Trash It Thursday,Name something you want to remove from your life in the coming year,0.5,Quick,Post
-Trash It Thursday,Unfollow spree,0.5,Quick,Screenshot
-Trash It Thursday,Do something you've been avoiding,1.5,Hard,Check-in
-Trash It Thursday,Throw away 10 items in your house,1,Standard,Photo
-Trash It Thursday,Set aside one item of clothing to donate,0.5,Quick,Photo
-Trash It Thursday,Tidy your desk or workspace,0.5,Quick,Before and after photo
-Feel Good Friday,Everything shower,1,Standard,Check-in
-Feel Good Friday,"Full hair and makeup, just because",1,Standard,Selfie
-Feel Good Friday,Do something that brings you joy,1,Standard,Photo
-Satisfying Saturday,"Read 15 pages of a book (yes, a real book)",1,Standard,Photo
-Satisfying Saturday,Stretch for 15 minutes,1,Standard,Check-in
-Satisfying Saturday,Organize something,1,Standard,Before and after photo
-Satisfying Saturday,Tell your babies they're special,0.5,Quick,Check-in
-Slow Down Sunday,Set a screen time limit 1 hour below last week's daily average,1.5,All day,Screen time screenshot
-Slow Down Sunday,Meditate for 15 minutes,1,Standard,App screenshot
-Slow Down Sunday,Go to sleep 1 hour earlier than usual,1.5,Hard,Sleep data screenshot
-Slow Down Sunday,"Go to bed by 9 p.m., no phone",1.5,Hard,Sleep data screenshot
-Slow Down Sunday,Go 1 hour screen-free,1,Standard,Check-in
-Feel Good Friday,Dance to 3 songs (kitchen dance parties count),1,Standard,Video or check-in
-Feel Good Friday,Solo date: 30 minutes alone doing something just for you,1,Standard,Photo
-Feel Good Friday,"At-home spa: paint your nails, face mask or long bath",1,Standard,Photo
-Feel Good Friday,Write down 3 things you like about yourself,0.5,Quick,Post or photo
-Satisfying Saturday,"Get outside with your family for 45 minutes (hike, park or bike ride)",1.5,Hard,Photo
-Satisfying Saturday,Try a new workout class or video,1.5,Hard,Photo or watch screenshot
-Satisfying Saturday,Meal plan next week,1,Standard,Photo of the plan
-Satisfying Saturday,Fix one small thing in the house you've been ignoring,1,Standard,Before and after photo
-Trash It Thursday,Clean out your car,1,Standard,Before and after photo
-Work It Wednesday,Work out with your kid,1,Standard,Photo
-Work It Wednesday,2-minute wall sit (sets allowed),1,Standard,Video or check-in
-Thoughtful Tuesday,Send a handwritten thank-you note,1,Standard,Photo
-Slow Down Sunday,Phone stays out of the bedroom tonight,1,Standard,Check-in
-Munchie Monday,No added/refined sugar all day,2,All day,Check-in
-Munchie Monday,Eat a fruit or vegetable you've never tried,1,Standard,Photo
-Random Mix-Up,Hype up someone in the group chat who's having a good week,0.5,Quick,Post
-Random Mix-Up,"Hit 10,000 steps",1.5,Hard,Watch screenshot
-Random Mix-Up,10 minutes outside with no phone,0.5,Quick,Check-in
-Random Mix-Up,Wear the outfit you've been saving for a special occasion,0.5,Quick,Selfie
+Munchie Monday,Prep a healthy snack or meal for the week,0.5,Hard,Photo
+Munchie Monday,Share a healthy recipe (bonus: 0.5 total if you make it and post a photo),0.25,Quick,Post the recipe
+Munchie Monday,Eat a vegetable at every meal (snacks don't count),0.5,Hard,Photos
+Munchie Monday,Eat home-cooked meals all day,0.5,All day,Photos
+Munchie Monday,Try a new home-cooked meal,0.25,Standard,Photo
+Munchie Monday,Set your fork down after every bite for one meal,0.25,Quick,Check-in
+Munchie Monday,Eat 25 g of fiber,0.5,Hard,Food log screenshot
+Munchie Monday,Drink 100 oz of water (soda and coffee don't count),0.5,All day,Photo or app screenshot
+Munchie Monday,No caffeine after 2 p.m.,0.25,Standard,Check-in
+Munchie Monday,Put your devices away during every meal,0.25,Standard,Check-in
+Thoughtful Tuesday,Share an accomplishment from this year,0.25,Quick,Post
+Thoughtful Tuesday,Reach out to an old friend or family member you've been meaning to check on,0.25,Standard,Check-in
+Thoughtful Tuesday,Give 3 people a compliment,0.25,Quick,Check-in
+Thoughtful Tuesday,Do something nice for someone else,0.25,Standard,Photo or check-in
+Thoughtful Tuesday,Share a song that motivates you to reach your goals,0.25,Quick,Post the song
+Thoughtful Tuesday,"Write a reflection: what went well today, what could have gone better, what's left undone",0.25,Quick,Post or photo
+Thoughtful Tuesday,"Spend an hour with your partner, both off your phones",0.25,Standard,Check-in
+Work It Wednesday,Spell-your-name workout,0.5,Hard,Photo or video
+Work It Wednesday,Walk outside for 20 minutes,0.25,Standard,Watch screenshot
+Work It Wednesday,20 push-ups,0.5,Hard,Video or check-in
+Work It Wednesday,5-minute plank,0.5,Very hard,Watch screenshot
+Work It Wednesday,50 squats,0.25,Standard,Video or check-in
+Trash It Thursday,Name something you want to remove from your life in the coming year,0.25,Quick,Post
+Trash It Thursday,Unfollow spree,0.25,Quick,Screenshot
+Trash It Thursday,Do something you've been avoiding,0.5,Hard,Check-in
+Trash It Thursday,Throw away 10 items in your house,0.25,Standard,Photo
+Trash It Thursday,Set aside one item of clothing to donate,0.25,Quick,Photo
+Trash It Thursday,Tidy your desk or workspace,0.25,Quick,Before and after photo
+Feel Good Friday,Everything shower,0.25,Standard,Check-in
+Feel Good Friday,"Full hair and makeup, just because",0.25,Standard,Selfie
+Feel Good Friday,Do something that brings you joy,0.25,Standard,Photo
+Satisfying Saturday,"Read 15 pages of a book (yes, a real book)",0.25,Standard,Photo
+Satisfying Saturday,Stretch for 15 minutes,0.25,Standard,Check-in
+Satisfying Saturday,Organize something,0.25,Standard,Before and after photo
+Satisfying Saturday,Tell your babies they're special,0.25,Quick,Check-in
+Slow Down Sunday,Set a screen time limit 1 hour below last week's daily average,0.5,All day,Screen time screenshot
+Slow Down Sunday,Meditate for 15 minutes,0.25,Standard,App screenshot
+Slow Down Sunday,Go to sleep 1 hour earlier than usual,0.5,Hard,Sleep data screenshot
+Slow Down Sunday,"Go to bed by 9 p.m., no phone",0.5,Hard,Sleep data screenshot
+Slow Down Sunday,Go 1 hour screen-free,0.25,Standard,Check-in
+Feel Good Friday,Dance to 3 songs (kitchen dance parties count),0.25,Standard,Video or check-in
+Feel Good Friday,Solo date: 30 minutes alone doing something just for you,0.25,Standard,Photo
+Feel Good Friday,"At-home spa: paint your nails, face mask or long bath",0.25,Standard,Photo
+Feel Good Friday,Write down 3 things you like about yourself,0.25,Quick,Post or photo
+Satisfying Saturday,"Get outside with your family for 45 minutes (hike, park or bike ride)",0.5,Hard,Photo
+Satisfying Saturday,Try a new workout class or video,0.5,Hard,Photo or watch screenshot
+Satisfying Saturday,Meal plan next week,0.25,Standard,Photo of the plan
+Satisfying Saturday,Fix one small thing in the house you've been ignoring,0.25,Standard,Before and after photo
+Trash It Thursday,Clean out your car,0.25,Standard,Before and after photo
+Work It Wednesday,Work out with your kid,0.25,Standard,Photo
+Work It Wednesday,2-minute wall sit (sets allowed),0.25,Standard,Video or check-in
+Thoughtful Tuesday,Send a handwritten thank-you note,0.25,Standard,Photo
+Slow Down Sunday,Phone stays out of the bedroom tonight,0.25,Standard,Check-in
+Munchie Monday,No added/refined sugar all day,0.5,All day,Check-in
+Munchie Monday,Eat a fruit or vegetable you've never tried,0.25,Standard,Photo
+Random Mix-Up,Hype up someone in the group chat who's having a good week,0.25,Quick,Post
+Random Mix-Up,"Hit 10,000 steps",0.5,Hard,Watch screenshot
+Random Mix-Up,10 minutes outside with no phone,0.25,Quick,Check-in
+Random Mix-Up,Wear the outfit you've been saving for a special occasion,0.25,Quick,Selfie

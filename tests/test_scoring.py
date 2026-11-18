@@ -38,11 +38,14 @@ def test_scaled_targets_match_rules_doc(target, days, expected):
 
 
 def test_partial_credit_table():
-    assert goal_points(2, 3) == pytest.approx(6.667, abs=1e-3)
-    assert goal_points(6, 7) == pytest.approx(8.571, abs=1e-3)
-    assert goal_points(4, 3) == 10  # going past the target earns nothing extra
+    # Each goal is worth up to 1 point: the share of the target hit, capped at 1.
+    assert goal_points(2, 3) == pytest.approx(0.667, abs=1e-3)
+    assert goal_points(6, 7) == pytest.approx(0.857, abs=1e-3)
+    assert goal_points(5, 3) == 1  # going past the target earns nothing extra
+    assert goal_points(7, 7) == 1  # brushing teeth every day is 1 point a week, not 7
     assert goal_points(0, 5) == 0
-    assert fmt(goal_points(6, 7)) == "8.6" and fmt(goal_points(2, 3)) == "6.7" and fmt(10.0) == "10"
+    assert fmt(goal_points(6, 7)) == "0.86" and fmt(goal_points(2, 3)) == "0.67" and fmt(1.0) == "1"
+    assert fmt(2.857) == "2.86" and fmt(0.25) == "0.25" and fmt(0.5) == "0.5" and fmt(0) == "0"
 
 
 def _player(uid, *goals):
@@ -50,36 +53,41 @@ def _player(uid, *goals):
 
 
 def test_example_week_from_rules_doc():
-    p = _player(1, (3, 3), (7, 6), (7, 7))
+    # 3 workouts (did 4), veggies 7 (did 7), sleep 7 (did 6) -> 1 + 1 + 0.86, no bonus
+    p = _player(1, (3, 4), (7, 7), (7, 6))
     assert not p.perfect
-    assert p.points == pytest.approx(28.571, abs=1e-3)
+    assert p.points == pytest.approx(2.857, abs=1e-3)
     perfect = _player(1, (3, 3), (7, 7), (7, 7))
-    assert perfect.points == 45
+    assert perfect.perfect and perfect.points == 4  # 3 goals + 1 perfect week bonus
 
 
 def test_team_bonus_only_when_everyone_perfect():
     a = _player(1, (3, 3), (7, 7), (7, 7))
     b = _player(2, (3, 3), (7, 7), (5, 5))
-    assert TeamWeek("x", [a, b]).goal_points == pytest.approx(90 * 1.25)
+    assert TeamWeek("x", [a, b]).goal_points == 4 + 4 + 2  # +1 per player
     c = _player(3, (3, 2), (7, 7), (5, 5))
-    assert TeamWeek("x", [a, b, c]).goal_points == pytest.approx(45 + 45 + c.points)
+    assert TeamWeek("x", [a, b, c]).goal_points == pytest.approx(4 + 4 + c.points)
 
 
-def test_mission_cap_in_date_order():
-    comps = [(date(2026, 12, d), 2.0) for d in range(1, 12)]  # 11 x 2 = 22
-    counted = cap_missions(comps)
-    assert sum(counted) == 20 and counted[-1] == 0
+def test_mission_cap_is_per_week():
+    weeks = challenge_weeks(date(2026, 12, 5), date(2026, 12, 18))  # two full weeks
+    comps = [(date(2026, 12, d), 0.5) for d in range(5, 12)]  # 7 x 0.5 in week 1
+    comps += [(date(2026, 12, 12), 0.25), (date(2026, 12, 13), 0.25)]  # week 2
+    comps += [(date(2026, 12, 25), 0.5)]  # after the challenge: doesn't count
+    counted = cap_missions(comps, weeks)
+    assert sum(counted[:7]) == 1 and counted[2:7] == [0, 0, 0, 0, 0]
+    assert counted[7:9] == [0.25, 0.25] and counted[9] == 0
 
 
 def test_standings_team_average():
     weeks = challenge_weeks(date(2026, 12, 5), date(2026, 12, 11))
     pw = {
-        1: [_player(1, (3, 3), (7, 7), (7, 7))],  # 45
-        2: [_player(2, (3, 3), (7, 7), (7, 7))],  # 45 -> team A perfect, +25%
-        3: [_player(3, (3, 3), (7, 7), (7, 6))],  # 28.57
+        1: [_player(1, (3, 3), (7, 7), (7, 7))],  # 4
+        2: [_player(2, (3, 3), (7, 7), (7, 7))],  # 4 -> team A all perfect, +1 each
+        3: [_player(3, (3, 3), (7, 7), (7, 6))],  # 2.857
     }
-    s = Standings(weeks, pw, {1: 1.0, 3: 2.0}, teams={1: "A", 2: "A", 3: "B"})
-    assert s.team_total("A") == pytest.approx((90 * 1.25 + 1.0) / 2)
-    assert s.team_total("B") == pytest.approx(28.571 + 2.0, abs=1e-3)
+    s = Standings(weeks, pw, {1: 0.5, 3: 1.0}, teams={1: "A", 2: "A", 3: "B"})
+    assert s.team_total("A") == pytest.approx((4 + 4 + 2 + 0.5) / 2)
+    assert s.team_total("B") == pytest.approx(2.857 + 1.0, abs=1e-3)
     assert s.ranked_teams()[0][0] == "A"
-    assert s.ranked_players()[0] == (1, 46.0)
+    assert s.ranked_players()[0] == (1, 4.5)

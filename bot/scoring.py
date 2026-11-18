@@ -1,15 +1,16 @@
 """Pure scoring rules for the challenge. No Discord, no database.
 
-Rules (from the proposed rules doc):
+Rules (from the Game Rules doc):
 - Every player has 3 goals, each "do X on N days per week" (N = 1..7).
 - Weeks run Saturday through Friday. A partial week at the start or end of the
   challenge scales each target down to fit, rounding up.
-- Each goal is worth up to 10 points a week: 10 x days done / target, capped at 10.
-- Perfect week (every goal at target): goal points x 1.5.
-- Team mode: if every player on a team has a perfect week, the team's goal
-  points for that week get +25%. Individual multipliers apply first.
-- Mini missions are added after multipliers, capped at 20 points per player
-  for the whole challenge, and never count toward a perfect week.
+- Each goal is worth up to 1 point a week: the share of the target you hit
+  (2 of 3 days = 0.67). Going past the target earns nothing extra.
+- Perfect week (every goal at 100%): +1 bonus point.
+- Team mode: if every player on a team has a perfect week, the team gets
+  +1 point per player that week.
+- Mini missions are worth 0.25 or 0.5, capped at 1 point per player per week,
+  and never count toward a perfect week.
 """
 from __future__ import annotations
 
@@ -17,10 +18,10 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-POINTS_PER_GOAL = 10.0
-PERFECT_WEEK_MULTIPLIER = 1.5
-TEAM_BONUS = 0.25
-MISSION_CAP = 20.0
+POINTS_PER_GOAL = 1.0
+PERFECT_WEEK_BONUS = 1.0
+TEAM_BONUS_PER_PLAYER = 1.0
+MISSION_WEEKLY_CAP = 1.0
 WEEK_START_WEEKDAY = 5  # Saturday (Monday = 0)
 
 
@@ -113,12 +114,12 @@ class PlayerWeek:
         return bool(self.goals) and all(g.perfect for g in self.goals)
 
     @property
-    def multiplier(self) -> float:
-        return PERFECT_WEEK_MULTIPLIER if self.perfect else 1.0
+    def bonus(self) -> float:
+        return PERFECT_WEEK_BONUS if self.perfect else 0.0
 
     @property
     def points(self) -> float:
-        return self.raw_points * self.multiplier
+        return self.raw_points + self.bonus
 
 
 @dataclass
@@ -131,19 +132,29 @@ class TeamWeek:
         return bool(self.players) and all(p.perfect for p in self.players)
 
     @property
+    def bonus(self) -> float:
+        return TEAM_BONUS_PER_PLAYER * len(self.players) if self.perfect else 0.0
+
+    @property
     def goal_points(self) -> float:
-        base = sum(p.points for p in self.players)
-        return base * (1 + TEAM_BONUS) if self.perfect else base
+        return sum(p.points for p in self.players) + self.bonus
 
 
-def cap_missions(completions: list[tuple[date, float]], cap: float = MISSION_CAP) -> list[float]:
-    """Apply the season cap in date order. Returns the points that count for each completion."""
+def cap_missions(completions: list[tuple[date, float]], weeks: list[Week],
+                 cap: float = MISSION_WEEKLY_CAP) -> list[float]:
+    """Apply the weekly cap in date order. Returns the points that count for each completion
+    (sorted by date). Completions outside the challenge's weeks count for nothing."""
     counted: list[float] = []
-    total = 0.0
-    for _, pts in sorted(completions, key=lambda c: c[0]):
-        allowed = max(0.0, min(pts, cap - total))
+    per_week: dict[int, float] = {}
+    for d, pts in sorted(completions, key=lambda c: c[0]):
+        w = week_for(d, weeks)
+        if w is None:
+            counted.append(0.0)
+            continue
+        used = per_week.get(w.number, 0.0)
+        allowed = max(0.0, min(pts, cap - used))
+        per_week[w.number] = used + allowed
         counted.append(allowed)
-        total += allowed
     return counted
 
 
@@ -183,8 +194,9 @@ class Standings:
 
 
 def fmt(points: float) -> str:
-    """Display rounding only. Scores are kept at full precision."""
-    return f"{points:.1f}".rstrip("0").rstrip(".") if points != int(points) else str(int(points))
+    """Display rounding only (2 decimals, no trailing zeros). Scores are kept at full precision."""
+    text = f"{points:.2f}".rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
 
 
 def progress_bar(days_done: int, target: int) -> str:

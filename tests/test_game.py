@@ -86,10 +86,10 @@ def test_full_month_simulation(db):
     assert len(used) == len(set(used)) or len(set(used)) >= 25  # few or no repeats
     s = game.standings(db, ch)
     assert len(s.weeks) == 5
-    # Player 1: perfect every week = 45 per week, short weeks included
+    # Player 1: perfect every week = 3 goals + 1 bonus = 4 per week, short weeks included
     assert all(pw.perfect for pw in s.player_weeks[1])
-    assert sum(pw.points for pw in s.player_weeks[1]) == pytest.approx(45 * 5)
-    assert all(v <= 20 for v in s.mission_points.values())
+    assert sum(pw.points for pw in s.player_weeks[1]) == pytest.approx(4 * 5)
+    assert all(v <= 5 for v in s.mission_points.values())  # at most 1 a week x 5 weeks
     ranked = s.ranked_players()
     assert ranked[0][0] == 1
     assert len(s.ranked_teams()) == 2
@@ -113,6 +113,9 @@ def test_mission_window_and_cap(db):
     db.set_daily_mission(ch.id, date(2026, 12, 2), db.missions(1)[0]["id"], at(date(2026, 12, 2), 7))
     assert game.open_mission(db, ch, at(date(2026, 12, 3), 6)) is not None   # 23h later
     assert game.open_mission(db, ch, at(date(2026, 12, 3), 8)) is None       # 25h later
-    for day in range(1, 12):
-        db.complete_mission(ch.id, 7, date(2026, 12, day), 2.0, None)
-    assert game.mission_points_left(db, ch, 7) == 0
+    # Dec 5-11 is one Saturday-Friday week: 0.5 + 0.5 hits the 1-point weekly cap
+    assert game.mission_points_left(db, ch, 7, date(2026, 12, 6)) == 1
+    db.complete_mission(ch.id, 7, date(2026, 12, 5), 0.5, None)
+    db.complete_mission(ch.id, 7, date(2026, 12, 6), 0.5, None)
+    assert game.mission_points_left(db, ch, 7, date(2026, 12, 7)) == 0
+    assert game.mission_points_left(db, ch, 7, date(2026, 12, 12)) == 1  # new week, fresh cap

@@ -108,7 +108,7 @@ async def log_checkin(ch: Challenge, user: discord.abc.User, goal: Goal, day: da
         msg += "\nThat goal is done for the week. 💪🏾"
         pw = game.player_week(db, ch, user.id, week)
         if pw.perfect:
-            msg += "\n✨ **Perfect week!** Your goal points this week get 1.5×."
+            msg += "\n✨ **Perfect week!** That's a +1 bonus point this week."
     return msg
 
 
@@ -250,14 +250,15 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
         f"Post a photo in {proof_name} and tap which goal it's for, or use `/checkin`. "
         f"{photo}\nAt {hour_label(config.REMINDER_HOUR)} {tz} you'll get a reminder if you haven't checked in that day."))
     e.add_field(name="💋 Points", inline=False, value=(
-        "Each goal is worth up to **10 points a week**: 10 × days done ÷ target. "
-        "Going past your target doesn't earn extra.\n"
-        "**Perfect week** (every goal hit): your week's goal points × **1.5**.\n"
-        "**Team bonus:** if every teammate has a perfect week, the team gets **+25%** that week."))
+        "Each goal is worth **up to 1 point a week**. Hit your target and you get the full point. "
+        "Fall short and you get the share you hit (2 of 3 workouts = 0.67). Going past your target doesn't earn extra.\n"
+        "**Perfect week** (all 3 goals hit): **+1 bonus point**.\n"
+        "**Team bonus:** if every teammate has a perfect week, the team gets **+1 point per player** that week."))
     e.add_field(name="⚡ Mini missions", inline=False, value=(
         f"A new one posts every morning at {hour_label(config.MISSION_POST_HOUR)} {tz}. "
-        f"Worth 0.5–2 points, 24 hours to do it, up to **{fmt(config.MISSION_CAP)} points** per person for the "
-        "challenge. They don't count toward a perfect week."))
+        f"Worth **0.25** (easy) or **0.5** (harder) points, 24 hours to do it, up to "
+        f"**{fmt(config.MISSION_WEEKLY_CAP)} point{'s' if config.MISSION_WEEKLY_CAP != 1 else ''} a week**. "
+        "They don't count toward a perfect week."))
     e.add_field(name="🍑 Weekly schedule", inline=False, value=(
         f"Weeks run **Saturday–Friday**. You can log any day of the current week until **Friday at midnight {tz}**, "
         f"then that week locks. Standings post **Saturday at {hour_label(config.STANDINGS_HOUR)} {tz}**. "
@@ -266,7 +267,7 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
              if config.CROWN_NICKNAMES else "")
     e.add_field(name="🏆 Prizes", inline=False, value=(
         f"**Winners** get the **{config.WINNER_ROLE_NAME}** role. **Top scorer** gets **{config.TOP_SCORER_ROLE_NAME}**"
-        f"{crown}. Bragging rights included. 👑"))
+        f"{crown}. Ties share the win. Bragging rights included. 👑"))
     players = db.players(ch.id)
     e.add_field(name=f"👯‍♀️ Signed up ({len(players)})", inline=False,
                 value=(" ".join(f"<@{p['user_id']}>" for p in players) or "Nobody yet. Be the first!")[:1024])
@@ -765,9 +766,10 @@ def complete_mission(ch: Challenge, user_id: int, proof_url: str | None, day: da
     m = game.open_mission(db, ch, now)
     if not m or (day and m["day"] != day.isoformat()):
         return "That mini mission has closed (you get 24 hours from when it posts)."
-    left = game.mission_points_left(db, ch, user_id)
+    left = game.mission_points_left(db, ch, user_id, date.fromisoformat(m["day"]))
     if left <= 0:
-        return f"Nice! You've already hit the {fmt(config.MISSION_CAP)}-point mini mission cap, so this one's for pride. 💅🏾"
+        return (f"Nice! You've already hit this week's {fmt(config.MISSION_WEEKLY_CAP)}-point mini mission cap, "
+                "so this one's for pride. 💅🏾")
     if not db.complete_mission(ch.id, user_id, date.fromisoformat(m["day"]), m["points"], proof_url):
         return "You already did this one."
     earned = min(m["points"], left)
@@ -799,9 +801,21 @@ async def missions_import(inter: discord.Interaction, file: discord.Attachment):
     await inter.response.send_message(f"Loaded {n} mini missions.", ephemeral=True)
 
 
+BUILT_IN_MISSIONS = os.path.join(os.path.dirname(__file__), "..", "data", "missions.csv")
+
+
+@missions_group.command(name="reset", description="Reload the built-in mission bank (replaces the current one).")
+async def missions_reset(inter: discord.Interaction):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    with open(BUILT_IN_MISSIONS, encoding="utf-8") as f:
+        n = db.import_missions(inter.guild_id, f.read())
+    await inter.response.send_message(f"Reloaded {n} built-in mini missions (0.25 easy / 0.5 harder).", ephemeral=True)
+
+
 @missions_group.command(name="add", description="Add one mini mission.")
 @app_commands.choices(day=[app_commands.Choice(name=t, value=t) for t in THEMES + [MIX_UP]])
-async def missions_add(inter: discord.Interaction, day: str, mission: str, points: app_commands.Range[float, 0.5, 2.0]):
+async def missions_add(inter: discord.Interaction, day: str, mission: str, points: app_commands.Range[float, 0.25, 1.0]):
     if not is_commish(inter):
         return await deny(inter, "Only the commissioner can do that.")
     db.add_mission(inter.guild_id, day, mission, points)
@@ -832,7 +846,8 @@ async def mystats(inter: discord.Interaction):
     e = discord.Embed(title=f"Week {week.number} ({pretty(week.start)} – {pretty(week.end)})", color=PINK,
                       description="\n".join(lines) or "No approved goals yet.")
     e.add_field(name="This week", value=f"{fmt(pw.points)} pts" + (" ✨ perfect so far" if pw.perfect else ""))
-    e.add_field(name="Mini missions", value=f"{fmt(s.mission_points.get(inter.user.id, 0))} / {fmt(config.MISSION_CAP)}")
+    used = config.MISSION_WEEKLY_CAP - game.mission_points_left(db, ch, inter.user.id, today)
+    e.add_field(name="Mini missions this week", value=f"{fmt(used)} / {fmt(config.MISSION_WEEKLY_CAP)}")
     e.add_field(name="Challenge total", value=f"{fmt(s.player_total(inter.user.id))} pts")
     await inter.response.send_message(embed=e, ephemeral=True)
 
@@ -844,7 +859,7 @@ def standings_embed(ch: Challenge, through_week: int | None, title: str) -> disc
         lines = []
         for i, (team, total) in enumerate(s.ranked_teams()):
             tw = s.team_weeks(team)[-1] if s.weeks else None
-            bonus = " · 💋 team perfect week (+25%)" if tw and tw.perfect else ""
+            bonus = " · 💋 team perfect week (+1 each)" if tw and tw.perfect else ""
             lines.append(f"{'🏆' if i == 0 else '💪🏾'} **{team}**: {fmt(total)}{bonus}")
         e.add_field(name="Teams" + (" (average per player)" if config.TEAM_SCORE_AVERAGE else ""),
                     value="\n".join(lines), inline=False)
@@ -854,7 +869,7 @@ def standings_embed(ch: Challenge, through_week: int | None, title: str) -> disc
         star = " ✨" if last and last.perfect else ""
         rows.append(f"{i}. <@{uid}>: {fmt(total)}{star}")
     e.add_field(name="Players", value="\n".join(rows) or "—", inline=False)
-    e.set_footer(text="✨ = perfect week (1.5×)")
+    e.set_footer(text="✨ = perfect week (+1)")
     return e
 
 
@@ -874,10 +889,11 @@ async def howtoplay(inter: discord.Interaction):
         "**Goals.** Everyone sets 3: *I will __ on __ days per week*. Fill them in with `/goals set`.\n"
         "**Check in.** Post a photo in " + p + " and tap the goal, or use `/checkin`. "
         f"At {config.REMINDER_HOUR % 12 or 12} p.m. you'll get a reminder if you haven't checked in.\n"
-        "**Points.** Each goal is worth up to 10 a week: 10 × days done ÷ target. "
-        "Hit every goal and your week gets **1.5×**. In team mode, a whole team of perfect weeks gets **+25%**.\n"
-        "**Mini missions.** One posts every morning. 0.5–2 points, 24 hours to do it, "
-        f"up to {fmt(config.MISSION_CAP)} points a month.\n"
+        "**Points.** Each goal is worth up to 1 point a week: hit your target for the full point, "
+        "or get the share you hit (2 of 3 = 0.67). Extra days don't add more. "
+        "Hit all 3 for a **+1 perfect week bonus**. In team mode, a team of all perfect weeks gets **+1 per player**.\n"
+        "**Mini missions.** One posts every morning. 0.25 or 0.5 points, 24 hours to do it, "
+        f"up to {fmt(config.MISSION_WEEKLY_CAP)} point a week.\n"
         "**Deadlines.** Weeks run Saturday–Friday and lock Friday at midnight. Standings post Saturday morning.\n"
         "`/mystats` for your week, `/leaderboard` for everyone."
     )
@@ -946,9 +962,9 @@ async def commish_remove(inter: discord.Interaction, member: discord.Member, goa
 
 
 @commish.command(name="mission-points", description="Set someone's mini mission points for a day (0 removes it).")
-@app_commands.describe(day="YYYY-MM-DD", points="e.g. 1 for the recipe bonus")
+@app_commands.describe(day="YYYY-MM-DD", points="e.g. 0.5 for the recipe bonus")
 async def commish_mission_points(inter: discord.Interaction, member: discord.Member, day: str,
-                                 points: app_commands.Range[float, 0, 4]):
+                                 points: app_commands.Range[float, 0, 1]):
     if not is_commish(inter):
         return await deny(inter, "Only the commissioner can do that.")
     ch = db.current_challenge(inter.guild_id) or db.latest_challenge(inter.guild_id)

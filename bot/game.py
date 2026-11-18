@@ -51,7 +51,7 @@ def standings(db: DB, challenge: Challenge, through_week: int | None = None) -> 
         uid = p["user_id"]
         pw[uid] = [player_week(db, challenge, uid, w) for w in weeks]
         comps = [(d, pts) for d, pts in db.mission_completions(challenge.id, uid) if d <= last_day]
-        missions[uid] = sum(cap_missions(comps, config.MISSION_CAP))
+        missions[uid] = sum(cap_missions(comps, weeks, config.MISSION_WEEKLY_CAP))
     teams = db.teams(challenge.id) if challenge.mode == "teams" else {}
     return Standings(weeks, pw, missions, teams=teams, team_average=config.TEAM_SCORE_AVERAGE)
 
@@ -106,9 +106,15 @@ def open_mission(db: DB, challenge: Challenge, now: datetime):
     return None
 
 
-def mission_points_left(db: DB, challenge: Challenge, user_id: int) -> float:
-    used = sum(cap_missions(db.mission_completions(challenge.id, user_id), config.MISSION_CAP))
-    return max(0.0, config.MISSION_CAP - used)
+def mission_points_left(db: DB, challenge: Challenge, user_id: int, day: date) -> float:
+    """How many more mini mission points she can earn in the week that contains `day`."""
+    weeks = challenge_weeks(challenge.start, challenge.end)
+    week = week_for(day, weeks)
+    if week is None:
+        return 0.0
+    comps = [(d, p) for d, p in db.mission_completions(challenge.id, user_id) if week.contains(d)]
+    used = sum(cap_missions(comps, weeks, config.MISSION_WEEKLY_CAP))
+    return max(0.0, config.MISSION_WEEKLY_CAP - used)
 
 
 def open_goals_today(db: DB, challenge: Challenge, user_id: int, today: date):
