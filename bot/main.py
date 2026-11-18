@@ -239,7 +239,7 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
              }.get(config.PHOTO_MODE, "Photos aren't required, but they're encouraged. Show off! 📸")
     e.add_field(name="🎯 Goals", inline=False, value=(
         "Set exactly **3 goals** (tap **Add my goals** after **I'm in**, or use `/goals set`). Every goal is:\n"
-        "*I will ___ on ___ days per week* (1–7 days).\n"
+        "*I will [goal] on [1–7] days per week*, written like \"Yoga, 3 days\".\n"
         "\"Don't\" goals get flipped: \"only drink 1 day\" becomes **alcohol-free 6 days**. "
         "One check-in per goal per day. The commissioner approves goals before the start."))
     e.add_field(name="💪🏾 Teams", inline=False, value=(
@@ -511,7 +511,7 @@ async def goals_set_form(inter: discord.Interaction):
     await open_goals_form(inter, ch)
 
 
-@goals_group.command(name="add", description="Add one of your 3 goals: I will ___ on ___ days per week.")
+@goals_group.command(name="add", description="Add one of your 3 goals: I will [goal] on [1-7] days per week.")
 @app_commands.rename(days="how-many-days")
 @app_commands.describe(goal="What you'll do, e.g. Yoga, Affirmations, 7 hours of sleep, Alcohol-free",
                        days="How many days per week")
@@ -886,7 +886,8 @@ async def howtoplay(inter: discord.Interaction):
     proof = channel(inter.guild, "proof_channel_id")
     p = proof.mention if proof else "the proof channel"
     text = (
-        "**Goals.** Everyone sets 3: *I will __ on __ days per week*. Fill them in with `/goals set`.\n"
+        "**Goals.** Everyone sets 3, each written like \"Yoga, 3 days\" or \"Affirmations, every day\". "
+        "Fill them in with `/goals set`.\n"
         "**Check in.** Post a photo in " + p + " and tap the goal, or use `/checkin`. "
         f"At {config.REMINDER_HOUR % 12 or 12} p.m. you'll get a reminder if you haven't checked in.\n"
         "**Points.** Each goal is worth up to 1 point a week: hit your target for the full point, "
@@ -1315,6 +1316,31 @@ async def setup_hook():
 @bot.event
 async def on_ready():
     log.info("Logged in as %s", bot.user)
+    await bring_servers_up_to_date()
+
+
+def mission_bank_is_outdated(guild_id: int) -> bool:
+    """Banks loaded before the 1-point scoring have missions worth more than the new max of 0.5."""
+    return any(m["points"] > 0.5 for m in db.missions(guild_id))
+
+
+async def bring_servers_up_to_date():
+    """After a deploy: reload an old-scale mission bank, and refresh open sign-up posts so they show
+    the current rules."""
+    for guild_id in db.all_guild_ids():
+        guild = bot.get_guild(guild_id)
+        if not guild:
+            continue
+        try:
+            if mission_bank_is_outdated(guild_id):
+                with open(BUILT_IN_MISSIONS, encoding="utf-8") as f:
+                    n = db.import_missions(guild_id, f.read())
+                log.info("reloaded %s missions for %s (old point scale)", n, guild.name)
+            ch = db.current_challenge(guild_id)
+            if ch and ch.signup_message_id:
+                await refresh_signup(guild, ch, closed=ch.status != "signup")
+        except Exception:
+            log.exception("couldn't bring %s up to date", guild_id)
 
 
 def run():

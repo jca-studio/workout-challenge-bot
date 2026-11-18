@@ -488,3 +488,24 @@ def test_goals_form_all_three_at_once():
     db.update_challenge(ch.id, status="active")
     locked = main.save_goals_from_form(db.get_challenge(ch.id), 901, ["A, 1", "B, 2", "C, 3"])
     assert "locked in" in locked["content"]
+
+
+def test_restart_reloads_old_mission_bank(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 55
+    db.set_settings(55, 10, 11, None)
+    old_csv = "Day,Mission,Points\nWork It Wednesday,5-minute plank,2\nFeel Good Friday,Everything shower,1\n"
+    db.import_missions(55, old_csv)
+    assert main.mission_bank_is_outdated(55)
+    monkeypatch.setattr(main.bot, "get_guild", lambda gid: guild if gid == 55 else None)
+    asyncio.new_event_loop().run_until_complete(main.bring_servers_up_to_date())
+    assert not main.mission_bank_is_outdated(55)
+    assert len(db.missions(55)) == 59 and {m["points"] for m in db.missions(55)} == {0.25, 0.5}
+
+
+def test_rules_text_has_no_blank_underscores():
+    guild = FakeGuild()
+    ch = main.db.create_challenge(1, "Dec", date(2027, 12, 1), date(2027, 12, 31), 99)
+    e = main.signup_embed(guild, ch)
+    assert "__" not in e.fields[0].value and "[goal]" in e.fields[0].value
