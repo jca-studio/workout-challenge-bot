@@ -27,7 +27,7 @@ TEAM_SCORE_AVERAGE = _env("TEAM_SCORE_AVERAGE", "true").lower() == "true"
 # (optional by default; the commissioner turns it on goal by goal with /commish photo).
 PHOTO_MODE = _env("PHOTO_MODE", "optional")
 
-MISSION_WEEKLY_CAP = float(_env("MISSION_WEEKLY_CAP", "1"))  # most mini mission points per player per week
+MISSION_WEEKLY_CAP = float(_env("MISSION_WEEKLY_CAP", "0"))  # most mini mission points per week; 0 = no cap
 MIXUP_CHANCE = float(_env("MIXUP_CHANCE", "0.15"))  # about once a week
 
 WINNER_ROLE_NAME = _env("WINNER_ROLE_NAME", "Challenge Champion")
@@ -37,3 +37,7 @@ TOP_SCORER_ROLE_NAME = _env("TOP_SCORER_ROLE_NAME", "That Girl")
 CROWN_NICKNAMES = _env("CROWN_NICKNAMES", "true").lower() == "true"
 WINNER_EMOJI = _env("WINNER_EMOJI", "👑")
 TOP_SCORER_EMOJI = _env("TOP_SCORER_EMOJI", "💎")
+
+# Scoring weights (see the Game Rules doc)
+PERFECT_WEEK_BONUS = float(_env("PERFECT_WEEK_BONUS", "1"))
+TEAM_BONUS_PER_PLAYER = float(_env("TEAM_BONUS_PER_PLAYER", "1"))

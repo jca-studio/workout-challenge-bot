@@ -9,8 +9,8 @@ Rules (from the Game Rules doc):
 - Perfect week (every goal at 100%): +1 bonus point.
 - Team mode: if every player on a team has a perfect week, the team gets
   +1 point per player that week.
-- Mini missions are worth 0.25 or 0.5, capped at 1 point per player per week,
-  and never count toward a perfect week.
+- Mini missions are worth 0.25 or 0.5 each, with no cap by default, and never
+  count toward a perfect week.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from datetime import date, timedelta
 POINTS_PER_GOAL = 1.0
 PERFECT_WEEK_BONUS = 1.0
 TEAM_BONUS_PER_PLAYER = 1.0
-MISSION_WEEKLY_CAP = 1.0
+MISSION_WEEKLY_CAP = 0.0  # 0 = no cap
 WEEK_START_WEEKDAY = 5  # Saturday (Monday = 0)
 
 
@@ -142,8 +142,8 @@ class TeamWeek:
 
 def cap_missions(completions: list[tuple[date, float]], weeks: list[Week],
                  cap: float = MISSION_WEEKLY_CAP) -> list[float]:
-    """Apply the weekly cap in date order. Returns the points that count for each completion
-    (sorted by date). Completions outside the challenge's weeks count for nothing."""
+    """Apply the weekly cap in date order (a cap of 0 means no cap). Returns the points that count for
+    each completion (sorted by date). Completions outside the challenge's weeks count for nothing."""
     counted: list[float] = []
     per_week: dict[int, float] = {}
     for d, pts in sorted(completions, key=lambda c: c[0]):
@@ -152,7 +152,7 @@ def cap_missions(completions: list[tuple[date, float]], weeks: list[Week],
             counted.append(0.0)
             continue
         used = per_week.get(w.number, 0.0)
-        allowed = max(0.0, min(pts, cap - used))
+        allowed = pts if cap <= 0 else max(0.0, min(pts, cap - used))
         per_week[w.number] = used + allowed
         counted.append(allowed)
     return counted

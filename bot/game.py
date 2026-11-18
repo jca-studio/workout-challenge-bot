@@ -4,11 +4,16 @@ from __future__ import annotations
 import random
 from datetime import date, datetime, time, timedelta
 
-from . import config
+from . import config, scoring
 from .db import DB, MIX_UP, Challenge, theme_for
 from .scoring import (
     GoalWeek, PlayerWeek, Standings, Week, cap_missions, challenge_weeks, scaled_target, week_for,
 )
+
+
+# Scoring weights come from settings so they can be tuned without code changes.
+scoring.PERFECT_WEEK_BONUS = config.PERFECT_WEEK_BONUS
+scoring.TEAM_BONUS_PER_PLAYER = config.TEAM_BONUS_PER_PLAYER
 
 
 def now_local() -> datetime:
@@ -106,12 +111,23 @@ def open_mission(db: DB, challenge: Challenge, now: datetime):
     return None
 
 
-def mission_points_left(db: DB, challenge: Challenge, user_id: int, day: date) -> float:
-    """How many more mini mission points she can earn in the week that contains `day`."""
+def mission_points_this_week(db: DB, challenge: Challenge, user_id: int, day: date) -> float:
     weeks = challenge_weeks(challenge.start, challenge.end)
     week = week_for(day, weeks)
     if week is None:
         return 0.0
+    comps = [(d, p) for d, p in db.mission_completions(challenge.id, user_id) if week.contains(d)]
+    return sum(cap_missions(comps, weeks, config.MISSION_WEEKLY_CAP))
+
+
+def mission_points_left(db: DB, challenge: Challenge, user_id: int, day: date) -> float:
+    """How many more mini mission points she can earn in the week that contains `day` (infinite with no cap)."""
+    weeks = challenge_weeks(challenge.start, challenge.end)
+    week = week_for(day, weeks)
+    if week is None:
+        return 0.0
+    if config.MISSION_WEEKLY_CAP <= 0:
+        return float("inf")
     comps = [(d, p) for d, p in db.mission_completions(challenge.id, user_id) if week.contains(d)]
     used = sum(cap_missions(comps, weeks, config.MISSION_WEEKLY_CAP))
     return max(0.0, config.MISSION_WEEKLY_CAP - used)

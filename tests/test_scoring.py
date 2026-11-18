@@ -74,9 +74,15 @@ def test_mission_cap_is_per_week():
     comps = [(date(2026, 12, d), 0.5) for d in range(5, 12)]  # 7 x 0.5 in week 1
     comps += [(date(2026, 12, 12), 0.25), (date(2026, 12, 13), 0.25)]  # week 2
     comps += [(date(2026, 12, 25), 0.5)]  # after the challenge: doesn't count
-    counted = cap_missions(comps, weeks)
+    counted = cap_missions(comps, weeks, cap=1)
     assert sum(counted[:7]) == 1 and counted[2:7] == [0, 0, 0, 0, 0]
     assert counted[7:9] == [0.25, 0.25] and counted[9] == 0
+
+
+def test_no_mission_cap_by_default():
+    weeks = challenge_weeks(date(2026, 12, 5), date(2026, 12, 11))
+    comps = [(date(2026, 12, d), 0.5) for d in range(5, 12)]
+    assert sum(cap_missions(comps, weeks)) == 3.5
 
 
 def test_standings_team_average():

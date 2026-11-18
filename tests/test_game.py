@@ -89,7 +89,7 @@ def test_full_month_simulation(db):
     # Player 1: perfect every week = 3 goals + 1 bonus = 4 per week, short weeks included
     assert all(pw.perfect for pw in s.player_weeks[1])
     assert sum(pw.points for pw in s.player_weeks[1]) == pytest.approx(4 * 5)
-    assert all(v <= 5 for v in s.mission_points.values())  # at most 1 a week x 5 weeks
+    assert all(v <= 31 * 0.5 for v in s.mission_points.values())  # no cap: at most one 0.5 mission a day
     ranked = s.ranked_players()
     assert ranked[0][0] == 1
     assert len(s.ranked_teams()) == 2
@@ -107,7 +107,8 @@ def test_open_goals_stop_after_target(db):
     assert "Work out" not in names and "Brush" in names
 
 
-def test_mission_window_and_cap(db):
+def test_mission_window_and_cap(db, monkeypatch):
+    monkeypatch.setattr(config, "MISSION_WEEKLY_CAP", 1.0)  # the cap is optional; test it switched on
     db.import_missions(1, CSV)
     ch = db.create_challenge(1, "x", date(2026, 12, 1), date(2026, 12, 31), 1)
     db.set_daily_mission(ch.id, date(2026, 12, 2), db.missions(1)[0]["id"], at(date(2026, 12, 2), 7))

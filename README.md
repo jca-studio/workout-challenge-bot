@@ -90,7 +90,7 @@ This loads the 59 mini missions from `data/missions.csv`. The commissioner role 
 - **Goal points:** each goal is worth up to **1 point a week**. Hit your target for the full point, or get the share you hit (2 of 3 workouts = 0.67). Going past the target earns nothing extra. Everyone has 3 goals, so the max is 3 a week.
 - **Perfect week:** hit all 3 goals and you get **+1 bonus point**, for a max of 4 a week.
 - **Team bonus:** every player on a team has a perfect week, so the team gets **+1 point per player** that week.
-- **Mini missions:** 0.25 (easy) or 0.5 (harder), open for 24 hours, capped at **1 point per player per week**. They never count toward a perfect week.
+- **Mini missions:** 0.25 (easy) or 0.5 (harder), open for 24 hours, no cap. They never count toward a perfect week.
 - **Partial weeks:** in a short week at the start or end of the month, targets shrink to fit, rounding up.
 - **Team scores:** compared by average per player, so a team with one extra player can't win on headcount.
 - **Ties:** players or teams tied at the top share the win.
@@ -111,7 +111,8 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | --- | --- | --- |
 | `PHOTO_MODE` | `optional` | `optional` (encouraged, never required), `required` (every goal), `per_goal` (the commissioner picks with `/commish photo`) |
 | `TEAM_MODE_MIN_PLAYERS` | `8` | Any number |
-| `MISSION_WEEKLY_CAP` | `1` | Most mini mission points per player per week |
+| `MISSION_WEEKLY_CAP` | `0` | Most mini mission points per player per week (`0` = no cap) |
+| `PERFECT_WEEK_BONUS` | `1` | Bonus points for hitting all 3 goals in a week |
 | `TEAM_SCORE_AVERAGE` | `true` | `false` compares team totals instead of averages |
 | `TIMEZONE` | `America/New_York` | e.g. `America/Los_Angeles` |
 | `REMINDER_HOUR` | `20` | 0–23 |
