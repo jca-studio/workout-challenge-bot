@@ -439,7 +439,7 @@ def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     intro = discord.Embed(title=f"📣 {ch.name}: what to expect", color=PINK, description=(
         f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}** · {mode}\n\n"
         "Here's everything you need before we start. Save this post! 💕"))
-    intro.add_field(name="1️⃣ How the bot works", inline=False, value=(
+    intro.add_field(name="🤖 How the bot works", inline=False, value=(
         "**Set 3 goals** before the start: tap **I'm in** on the sign-up post, then **Add my goals**.\n"
         f"**Check in** by posting a photo in {proof_name} and tapping the goal it's for, or use `/checkin`.\n"
         "**Do the mini mission** each day for bonus points.\n"
