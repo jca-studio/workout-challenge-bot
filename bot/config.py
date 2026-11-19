@@ -43,3 +43,6 @@ TOP_SCORER_EMOJI = _env("TOP_SCORER_EMOJI", "💎")
 # Scoring weights (see the Game Rules doc)
 PERFECT_WEEK_BONUS = float(_env("PERFECT_WEEK_BONUS", "1"))
 TEAM_BONUS_PER_PLAYER = float(_env("TEAM_BONUS_PER_PLAYER", "1"))
+
+# Who gets install alerts and can run /botstats. Defaults to the bot's owner in the Developer Portal.
+OWNER_ID = int(_env("OWNER_ID", "0") or 0)

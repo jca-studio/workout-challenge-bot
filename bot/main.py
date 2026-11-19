@@ -126,6 +126,7 @@ async def log_checkin(ch: Challenge, user: discord.abc.User, goal: Goal, day: da
 async def setup(inter: discord.Interaction, announce_channel: discord.TextChannel,
                 proof_channel: discord.TextChannel, mission_channel: discord.TextChannel | None = None,
                 commissioner_role: discord.Role | None = None):
+    first_setup = db.settings(inter.guild_id) is None
     db.set_settings(inter.guild_id, announce_channel.id, proof_channel.id,
                     commissioner_role.id if commissioner_role else None,
                     mission_channel.id if mission_channel else None)
@@ -133,6 +134,8 @@ async def setup(inter: discord.Interaction, announce_channel: discord.TextChanne
     if not has_missions:
         with open(BUILT_IN_MISSIONS, encoding="utf-8") as f:
             has_missions = db.import_missions(inter.guild_id, f.read())
+    if first_setup:
+        await notify_owner(f"⚙️ **{inter.guild.name}** ran `/setup`. {len(db.all_guild_ids())} servers set up so far.")
     missions_in = mission_channel or announce_channel
     await inter.response.send_message(
         f"Set. Sign-ups and roundups in {announce_channel.mention}, proof in {proof_channel.mention}, "
@@ -185,6 +188,7 @@ async def challenge_open(inter: discord.Interaction, start: str, end: str, signu
         db.update_challenge(ch.id, status="cancelled")  # don't leave a challenge with no sign-up post
         return await inter.followup.send(error, ephemeral=True)
     db.mark_job(ch.id, "signup_reminder", today.isoformat())  # the post itself is today's reminder
+    await notify_owner(f"🏁 **{inter.guild.name}** opened **{ch.name}** ({pretty(s)} – {pretty(e)}).")
     await inter.followup.send(f"Sign-ups are open in {ann.mention} until the end of {pretty(dl)}.", ephemeral=True)
 
 
@@ -1388,6 +1392,84 @@ async def before_scheduler():
 async def setup_hook():
     await bot.tree.sync()
     scheduler.start()
+
+
+# ---------- owner: install alerts and /botstats ----------
+
+_owner_id: int | None = None
+
+
+async def owner_id() -> int | None:
+    """The person who gets alerts: OWNER_ID if set, otherwise the bot's owner in the Developer Portal."""
+    global _owner_id
+    if config.OWNER_ID:
+        return config.OWNER_ID
+    if _owner_id is None:
+        try:
+            app = await bot.application_info()
+            _owner_id = app.team.owner_id if app.team else app.owner.id
+        except discord.HTTPException:
+            return None
+    return _owner_id
+
+
+async def notify_owner(text: str):
+    """DM the owner. Never let an alert break the command that triggered it."""
+    try:
+        uid = await owner_id()
+        if uid:
+            user = bot.get_user(uid) or await bot.fetch_user(uid)
+            await user.send(text)
+    except Exception:
+        log.warning("couldn't send owner alert", exc_info=True)
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    await notify_owner(f"👋 Added to **{guild.name}** ({guild.member_count or '?'} members). "
+                       f"Now in {len(bot.guilds)} server{'s' if len(bot.guilds) != 1 else ''}.")
+
+
+@bot.event
+async def on_guild_remove(guild: discord.Guild):
+    await notify_owner(f"👋 Removed from **{guild.name}**. Now in {len(bot.guilds)} "
+                       f"server{'s' if len(bot.guilds) != 1 else ''}.")
+
+
+def botstats_text(guilds: list[discord.Guild], today: date) -> str:
+    """Install and usage numbers across every server, plus check-in rates for running challenges."""
+    set_up = set(db.all_guild_ids())
+    lines, totals = [], {"running": 0, "players": 0, "active7": 0}
+    for g in sorted(guilds, key=lambda g: -(g.member_count or 0)):
+        ch = db.current_challenge(g.id)
+        done = db.challenge_counts(g.id).get("finished", 0)
+        if g.id not in set_up:
+            status = "not set up yet"
+        elif not ch:
+            status = f"set up, no challenge running · {done} finished"
+        else:
+            players = len(db.players(ch.id))
+            week_ago = max(ch.start, today - timedelta(days=6))
+            active = len(db.checkin_users_between(ch.id, week_ago, today)) if ch.status == "active" else 0
+            rate = f" · {active}/{players} checked in this past week" if ch.status == "active" else ""
+            status = f"{ch.name}: {ch.status}, {players} players{rate} · {done} finished"
+            totals["running"] += 1
+            totals["players"] += players
+            totals["active7"] += active
+        lines.append(f"• **{g.name}** ({g.member_count or '?'} members): {status}")
+    head = (f"**{len(guilds)} servers** · {len(set_up & {g.id for g in guilds})} set up · "
+            f"{totals['running']} with a challenge · {totals['players']} players")
+    if totals["players"]:
+        head += f" · {totals['active7']} checked in this past week"
+    return (head + "\n\n" + "\n".join(lines))[:2000]
+
+
+@bot.tree.command(description="Bot owner only: how many servers use the bot, and how they're doing.")
+@app_commands.allowed_contexts(guilds=False, dms=True, private_channels=False)
+async def botstats(inter: discord.Interaction):
+    if inter.user.id != await owner_id():
+        return await deny(inter, "Only the bot's owner can see this.")
+    await inter.response.send_message(botstats_text(list(bot.guilds), game.now_local().date()))
 
 
 @bot.event

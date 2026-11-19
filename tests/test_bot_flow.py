@@ -553,3 +553,44 @@ def test_daily_signup_reminder_until_signups_close(monkeypatch):
     assert last.startswith("⏰ **Last day to sign up for January Challenge!**")
     assert all(kw["allowed_mentions"].users is False for _, kw in reminders)  # names show, nobody gets pinged
     assert db.get_challenge(ch.id).status == "active"
+
+
+def test_owner_alerts_and_botstats(monkeypatch):
+    db = main.db
+    sent = []
+
+    class Owner:
+        async def send(self, text):
+            sent.append(text)
+    monkeypatch.setattr(main.config, "OWNER_ID", 4242)
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: Owner() if uid == 4242 else None)
+    run = asyncio.new_event_loop().run_until_complete
+
+    a, b, c = (SimpleNamespace(id=9001, name="Run Club", member_count=42),
+               SimpleNamespace(id=9002, name="Book Moms", member_count=12),
+               SimpleNamespace(id=9003, name="New Server", member_count=5))
+    monkeypatch.setattr(type(main.bot), "guilds", property(lambda self: [a, b, c]))
+    run(main.on_guild_join(c))
+    assert sent[-1] == "👋 Added to **New Server** (5 members). Now in 3 servers."
+
+    # Run Club: active challenge, 3 players, 2 checked in this week. Book Moms: set up, nothing running.
+    db.set_settings(9001, 1, 2, None)
+    db.set_settings(9002, 1, 2, None)
+    ch = db.create_challenge(9001, "Run Club March", date(2028, 3, 1), date(2028, 3, 31), 1)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    for uid in (1, 2, 3):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    db.approve_goals(ch.id)
+    for uid in (1, 2):
+        db.add_checkin(db.goals(ch.id, uid)[0].id, uid, date(2028, 3, 9), None)
+    text = main.botstats_text([a, b, c], date(2028, 3, 10))
+    assert text.startswith("**3 servers** · 2 set up · 1 with a challenge · 3 players · 2 checked in this past week")
+    assert "• **Run Club** (42 members): Run Club March: active, 3 players · 2/3 checked in this past week" in text
+    assert "• **Book Moms** (12 members): set up, no challenge running · 0 finished" in text
+    assert "• **New Server** (5 members): not set up yet" in text
+
+    # Only the owner can run /botstats
+    stranger = fake_inter(FakeGuild(), 77)
+    run(main.botstats.callback(stranger))
+    assert "Only the bot's owner" in stranger.response.sent[0][0]

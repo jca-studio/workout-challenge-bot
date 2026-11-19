@@ -308,6 +308,17 @@ class DB:
             "SELECT 1 FROM checkins c JOIN goals g ON g.id=c.goal_id WHERE g.challenge_id=? AND c.user_id=? AND c.day=?",
             (challenge_id, user_id, day.isoformat())).fetchone() is not None
 
+    def checkin_users_between(self, challenge_id: int, start: date, end: date) -> set[int]:
+        """Players who logged at least one goal check-in between two days (inclusive)."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT c.user_id FROM checkins c JOIN goals g ON g.id=c.goal_id "
+            "WHERE g.challenge_id=? AND c.day BETWEEN ? AND ?", (challenge_id, start.isoformat(), end.isoformat()))
+        return {r[0] for r in rows}
+
+    def challenge_counts(self, guild_id: int) -> dict[str, int]:
+        rows = self.conn.execute("SELECT status, COUNT(*) FROM challenges WHERE guild_id=? GROUP BY status", (guild_id,))
+        return {r[0]: r[1] for r in rows}
+
     # ---- missions ----
     def import_missions(self, guild_id: int, csv_text: str, replace: bool = True) -> int:
         reader = csv.DictReader(io.StringIO(csv_text))

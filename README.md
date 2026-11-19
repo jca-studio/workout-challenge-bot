@@ -96,6 +96,13 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 - **Team scores:** compared by average per player, so a team with one extra player can't win on headcount.
 - **Ties:** players or teams tied at the top share the win.
 
+## Knowing who uses the bot
+
+- **Alerts by DM:** the bot messages its owner (you, as set in the Developer Portal) when it's added to or removed from a server, when a server runs `/setup` for the first time, and when a server opens a challenge.
+- **`/botstats`:** type it in your DMs with the bot (it doesn't appear in servers). It lists every server the bot is in, which ones are set up, which have a challenge running, how many players they have, and how many checked in during the past week.
+- To send alerts to someone else, set `OWNER_ID` in Railway to their Discord user ID.
+- The Developer Portal's **Install Count** shows a rough daily total too.
+
 ## Crowns
 
 When a challenge ends, the winners get 👑 in front of their server nickname, and the top scorer gets 💎 ("👑💎 Jenna" if she's both). The crowns stay until the next challenge ends. Then the bot moves them to the new winners and puts everyone else's nickname back.
@@ -134,7 +141,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 65 tests, including a simulated month
+python -m pytest                 # 70 tests, including a simulated month
 DISCORD_TOKEN=... python -m bot.main
 ```
 
