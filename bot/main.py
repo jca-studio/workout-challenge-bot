@@ -426,6 +426,120 @@ async def challenge_cancel(inter: discord.Interaction, confirm: str):
     await inter.response.send_message(f"{ch.name} is cancelled.")
 
 
+def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
+    """Everything a player needs before the start: how it works, points, reminders, commands, and who's in."""
+    tz = tz_label()
+    proof = channel(guild, "proof_channel_id")
+    missions = mission_channel(guild)
+    proof_name = proof.mention if proof else "the proof channel"
+    bonus = fmt(config.PERFECT_WEEK_BONUS)
+    mode = {"teams": f"Team mode: **{' vs '.join(config.TEAM_NAMES)}**",
+            "individual": "Everyone plays for herself"}.get(ch.mode or "", "Teams are set when sign-ups close")
+
+    intro = discord.Embed(title=f"📣 {ch.name}: what to expect", color=PINK, description=(
+        f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}** · {mode}\n\n"
+        "Here's everything you need before we start. Save this post! 💕"))
+    intro.add_field(name="1️⃣ How the bot works", inline=False, value=(
+        "**Set 3 goals** before the start: tap **I'm in** on the sign-up post, then **Add my goals**.\n"
+        f"**Check in** by posting a photo in {proof_name} and tapping the goal it's for, or use `/checkin`.\n"
+        "**Do the mini mission** each day for bonus points.\n"
+        "**Watch the roundup** every morning to see the leaderboard and who's on pace.\n"
+        f"**Win** the challenge for the winner role and a {config.WINNER_EMOJI} on your name until next month."))
+
+    points = discord.Embed(title="💋 How points work", color=PINK)
+    points.add_field(name="Goals", inline=False, value=(
+        "Each goal is worth **up to 1 point a week**. Hit your target for the full point. "
+        "Fall short and you get the share you hit (2 of 3 workouts = 0.67). Extra days don't add more."))
+    points.add_field(name="Perfect week", inline=False, value=(
+        f"Hit all 3 goals: **+{bonus} bonus point{'' if config.PERFECT_WEEK_BONUS == 1 else 's'}**."
+        + (f" If your whole team is perfect, everyone gets **+{fmt(config.TEAM_BONUS_PER_PLAYER)}** more."
+           if ch.mode == "teams" else "")))
+    cap = (f" Up to {fmt(config.MISSION_WEEKLY_CAP)} points a week." if config.MISSION_WEEKLY_CAP > 0 else " No cap.")
+    points.add_field(name="Mini missions", inline=False, value=(
+        f"**0.25** (easy) or **0.5** (harder) each.{cap} They don't count toward a perfect week."))
+
+    reminders = discord.Embed(title="⏰ Reminders and the daily schedule", color=GOLD, description=(
+        f"All times are {tz}.\n\n"
+        f"**{hour_label(config.MISSION_POST_HOUR)}** · Today's mini mission posts"
+        + (f" in {missions.mention}" if missions else "") + ". You have 24 hours.\n"
+        f"**{hour_label(config.ROUNDUP_HOUR)}** · The morning roundup: leaderboard plus everyone's ✅ progress.\n"
+        f"**{hour_label(config.REMINDER_HOUR)}** · If you haven't checked in that day, I'll DM you a reminder "
+        "with a button for each goal.\n"
+        "**Friday at midnight** · The week locks. You can log any day of the current week until then.\n"
+        "**Saturday morning** · The roundup is the week's final standings.\n\n"
+        "📩 Not getting DMs? Right-click (or long-press) the server → **Privacy Settings** → turn on "
+        "**Direct Messages**."))
+
+    commands = discord.Embed(title="⌨️ Commands to know", color=GOLD, description=(
+        "`/goals set` · fill in or edit your 3 goals (before the start)\n"
+        "`/goals view` · see your goals, or someone else's\n"
+        "`/checkin` · log a goal, for today or an earlier day this week\n"
+        "`/mission today` · see today's mini mission\n"
+        "`/mission done` · mark the mini mission done\n"
+        "`/mystats` · your week so far and your total\n"
+        "`/leaderboard` · everyone's standings\n"
+        "`/howtoplay` · the rules in one message"))
+
+    rows, missing = [], []
+    for p in db.players(ch.id):
+        uid = p["user_id"]
+        gs = db.goals(ch.id, uid)
+        if not gs:
+            missing.append(f"<@{uid}>")
+            continue
+        team = f" ({p['team']})" if p["team"] else ""
+        rows.append(f"**<@{uid}>**{team}: " + " · ".join(format_goal(g.name, g.target_days) for g in gs))
+    who = "\n".join(rows) or "Nobody has set goals yet."
+    if missing:
+        who += "\n\n**Still need goals:** " + " ".join(missing) + " (tap **I'm in** on the sign-up post, then **Add my goals**)"
+    players = discord.Embed(title=f"👯‍♀️ Who's playing ({len(db.players(ch.id))})", color=PINK)
+    chunks, current = [], ""
+    for line in who.split("\n"):
+        if len(current) + len(line) + 1 > 4000:
+            chunks.append(current)
+            current = ""
+        current += ("\n" if current else "") + line
+    chunks.append(current)
+    players.description = chunks[0]
+    extra = [discord.Embed(description=c, color=PINK) for c in chunks[1:]]
+    return [intro, points, reminders, commands, players, *extra]
+
+
+@challenge_group.command(name="overview", description="Commissioner: send players a what-to-expect overview.")
+@app_commands.describe(send_to="Post it in the announce channel, or DM it to every player")
+@app_commands.choices(send_to=[app_commands.Choice(name="Announce channel", value="channel"),
+                               app_commands.Choice(name="DM every player", value="dm")])
+async def challenge_overview(inter: discord.Interaction, send_to: str = "channel"):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch:
+        return await deny(inter, "No challenge running right now.")
+    await inter.response.defer(ephemeral=True)
+    pages = message_pages(overview_embeds(inter.guild, ch))
+    if send_to == "channel":
+        ann = channel(inter.guild, "announce_channel_id")
+        if not ann:
+            return await inter.followup.send("Run `/setup` first.", ephemeral=True)
+        for page in pages:
+            await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
+        return await inter.followup.send(f"Posted the overview in {ann.mention}.", ephemeral=True)
+    sent, failed = 0, []
+    for p in db.players(ch.id):
+        try:
+            user = bot.get_user(p["user_id"]) or await bot.fetch_user(p["user_id"])
+            for page in pages:
+                await user.send(embeds=page)
+            sent += 1
+        except (discord.Forbidden, discord.HTTPException):
+            failed.append(f"<@{p['user_id']}>")
+    msg = f"DM'd the overview to {sent} player{'s' if sent != 1 else ''}."
+    if failed:
+        msg += (" Couldn't reach " + " ".join(failed) + " (DMs off). Post it in the channel too, or ask them to "
+                "turn on DMs from this server.")
+    await inter.followup.send(msg, ephemeral=True)
+
+
 bot.tree.add_command(challenge_group)
 
 

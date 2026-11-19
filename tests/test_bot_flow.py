@@ -594,3 +594,58 @@ def test_owner_alerts_and_botstats(monkeypatch):
     stranger = fake_inter(FakeGuild(), 77)
     run(main.botstats.callback(stranger))
     assert "Only the bot's owner" in stranger.response.sent[0][0]
+
+
+def test_challenge_overview_channel_and_dm(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 88
+    db.set_settings(88, 10, 11, None, mission=12)
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    ch = db.create_challenge(88, "December Challenge", date(2026, 12, 1), date(2026, 12, 31), 99)
+    db.join(ch.id, 1201)
+    db.join(ch.id, 1202)
+    db.join(ch.id, 1203)
+    db.set_goals(ch.id, 1201, [("Yoga", 3), ("Affirmations", 7), ("Read", 5)], False)
+    db.set_goals(ch.id, 1202, [("Run", 2), ("Water", 7), ("Stretch", 4)], False)
+
+    embeds = main.overview_embeds(guild, ch)
+    titles = [e.title for e in embeds]
+    assert titles == ["📣 December Challenge: what to expect", "💋 How points work",
+                      "⏰ Reminders and the daily schedule", "⌨️ Commands to know", "👯‍♀️ Who's playing (3)"]
+    who = embeds[-1].description
+    assert "**<@1201>**: Yoga, 3 days · Affirmations, every day · Read, 5 days" in who
+    assert "**Still need goals:** <@1203>" in who
+    assert "<#12>" in embeds[2].description and "8 p.m." in embeds[2].description
+    assert all(sum(len(e) for e in page) <= 6000 for page in main.message_pages(embeds))
+
+    def inter():
+        i = fake_inter(guild, 99)
+        i.followup = FakeResponse()
+        i.followup.send = i.followup.send_message
+
+        async def defer(**kw):
+            pass
+        i.response.defer = defer
+        return i
+    run = asyncio.new_event_loop().run_until_complete
+    a = inter()
+    run(main.challenge_overview.callback(a, "channel"))
+    assert "Posted the overview" in a.followup.sent[0][0]
+    assert len(guild.ann.sent[-1][1]["embeds"]) == 5
+
+    dms = []
+
+    class U:
+        def __init__(self, uid):
+            self.uid = uid
+
+        async def send(self, **kw):
+            if self.uid == 1202:
+                raise discord.Forbidden(SimpleNamespace(status=403, reason="no"), "closed")
+            dms.append(self.uid)
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: U(uid))
+    b = inter()
+    run(main.challenge_overview.callback(b, "dm"))
+    assert set(dms) == {1201, 1203}
+    assert "DM'd the overview to 2 players" in b.followup.sent[0][0] and "<@1202>" in b.followup.sent[0][0]
