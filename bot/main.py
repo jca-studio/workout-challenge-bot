@@ -249,7 +249,7 @@ def signup_reminder_text(guild: discord.Guild, ch: Challenge, today: date) -> st
              + (": " + " ".join(f"<@{p['user_id']}>" for p in players) if players else ". Be the first! 👑")]
     missing = [p["user_id"] for p in players if len(db.goals(ch.id, p["user_id"])) < 3]
     if missing:
-        lines.append("📝 Still need to set goals (tap **I'm in** again, then **Add my goals**): "
+        lines.append(f"📝 Still need to set goals by {pretty(last_day)} (tap **I'm in** again, then **Add my goals**): "
                      + " ".join(f"<@{u}>" for u in missing))
     lines.append(f"The challenge starts {pretty(ch.start)}. 💪🏾")
     return "\n".join(lines)
@@ -1316,11 +1316,27 @@ async def scheduler():
 async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     ann = channel(guild, "announce_channel_id")
     today = now.date()
+    key = today.isoformat()
     if (ch.status == "signup" and game.signups_open(ch, now) and now.hour >= config.SIGNUP_REMINDER_HOUR
             and not db.job_done(ch.id, "signup_reminder", today.isoformat())):
         db.mark_job(ch.id, "signup_reminder", today.isoformat())
         if ann:
             await ann.send(signup_reminder_text(guild, ch, today), allowed_mentions=discord.AllowedMentions.none())
+
+    # DM players who signed up but haven't set goals, in the last few days before the deadline.
+    if ch.status == "signup" and game.signups_open(ch, now) and now.hour >= config.SIGNUP_REMINDER_HOUR:
+        deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
+        if (deadline - today).days <= config.GOAL_NUDGE_DAYS and not db.job_done(ch.id, "goal_nudge", key):
+            db.mark_job(ch.id, "goal_nudge", key)
+            await nudge_missing_goals(guild, ch, deadline, today)
+
+    # The what-to-expect overview, posted the day before the challenge starts.
+    if (ch.status in ("signup", "ready") and today == ch.start - timedelta(days=1)
+            and now.hour >= config.OVERVIEW_HOUR and not db.job_done(ch.id, "overview", "auto")):
+        db.mark_job(ch.id, "overview", "auto")
+        if ann:
+            for page in message_pages(overview_embeds(guild, ch)):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
 
     if game.should_lock(ch, now):
         if len(db.players(ch.id)) < 2:
@@ -1347,7 +1363,6 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     if ch.status != "active":
         return
     in_range = ch.start <= today <= ch.end
-    key = today.isoformat()
 
     if in_range and now.hour >= config.MISSION_POST_HOUR and not db.job_done(ch.id, "mission", key):
         m = game.pick_mission(db, ch, today)
@@ -1373,6 +1388,28 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")
         await finish(guild, ch, ann)
+
+
+async def nudge_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, today: date):
+    """DM each signed-up player who hasn't set 3 goals, with a button that opens the goals form."""
+    days_left = (deadline - today).days
+    when = ("tonight at 11:59 p.m. " + tz_label()) if days_left <= 0 else (
+        "tomorrow night" if days_left == 1 else f"{pretty(deadline)} at 11:59 p.m. {tz_label()}")
+    for p in db.players(ch.id):
+        uid = p["user_id"]
+        have = len(db.goals(ch.id, uid))
+        if have >= 3:
+            continue
+        msg = (f"👋 You're signed up for **{ch.name}** in {guild.name}, but "
+               + ("you haven't set your goals yet." if have == 0 else f"you've only set {have} of 3 goals.")
+               + f"\nGoals are due **{when}**. Tap below to fill them in. It takes a minute! 💪🏾")
+        button = discord.ui.Button(label="Add my goals" if have == 0 else "Finish my goals", emoji="➕",
+                                   style=discord.ButtonStyle.success, custom_id=f"mb:goals:{ch.id}")
+        try:
+            user = bot.get_user(uid) or await bot.fetch_user(uid)
+            await user.send(msg, view=make_view([button]))
+        except Exception:
+            log.info("couldn't DM %s about goals", uid)  # the daily channel reminder still lists her
 
 
 async def send_reminders(guild: discord.Guild, ch: Challenge, today: date):

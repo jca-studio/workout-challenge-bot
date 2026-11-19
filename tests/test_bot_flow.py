@@ -125,7 +125,11 @@ def test_month_of_jobs(monkeypatch):
     ch = db.get_challenge(ch.id)
     texts = [c or "" for c, _ in guild.ann.sent]
     embeds = [kw.get("embed") for _, kw in guild.ann.sent if kw.get("embed")]
-    roundups = [kw["embeds"] for _, kw in guild.ann.sent if kw.get("embeds")]
+    roundups = [kw["embeds"] for _, kw in guild.ann.sent
+                if kw.get("embeds") and not kw["embeds"][0].title.endswith("what to expect")]
+    overviews = [kw["embeds"] for _, kw in guild.ann.sent
+                 if kw.get("embeds") and kw["embeds"][0].title.endswith("what to expect")]
+    assert len(overviews) == 1  # posted on Nov 30, the day before the start
     missions = [kw["embed"] for _, kw in guild.missions.sent]
     assert ch.status == "finished"
     assert any("starts now" in t for t in texts)
@@ -649,3 +653,47 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
     run(main.challenge_overview.callback(b, "dm"))
     assert set(dms) == {1201, 1203}
     assert "DM'd the overview to 2 players" in b.followup.sent[0][0] and "<@1202>" in b.followup.sent[0][0]
+
+
+def test_goal_nudges_and_day_before_overview(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 66
+    db.set_settings(66, 10, 11, None)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    dms = []
+
+    class U:
+        def __init__(self, uid):
+            self.uid = uid
+
+        async def send(self, content=None, **kw):
+            dms.append((self.uid, content, kw.get("view")))
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: U(uid))
+    ch = db.create_challenge(66, "February Challenge", date(2029, 2, 1), date(2029, 2, 28), 99)  # deadline: Jan 31
+    for uid in (1301, 1302, 1303):
+        db.join(ch.id, uid)
+    db.add_goal(ch.id, 1302, "Yoga", 3, False)  # 1 of 3
+    db.set_goals(ch.id, 1303, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)  # done
+    run = asyncio.new_event_loop().run_until_complete
+    d = date(2029, 1, 25)
+    while d <= date(2029, 2, 1):
+        for hour in (9, 10, 12, 15):
+            run(main.run_jobs(guild, db.get_challenge(ch.id), at(d, hour)))
+        d += timedelta(days=1)
+
+    # Nudges: Jan 28, 29, 30, 31 (3, 2, 1, 0 days before the deadline), only to the two without 3 goals
+    assert len(dms) == 8 and {u for u, _, _ in dms} == {1301, 1302}
+    first_1301 = next(c for u, c, _ in dms if u == 1301)
+    assert "haven't set your goals yet" in first_1301 and "Wed Jan 31 at 11:59 p.m." in first_1301
+    assert "only set 1 of 3 goals" in next(c for u, c, _ in dms if u == 1302)
+    assert "tonight at 11:59 p.m." in dms[-1][1]
+    assert dms[0][2].children[0].custom_id == f"mb:goals:{ch.id}"
+
+    # The overview posted once, on Jan 31 (the day before the start)
+    overviews = [kw["embeds"] for _, kw in guild.ann.sent
+                 if kw.get("embeds") and kw["embeds"][0].title.endswith("what to expect")]
+    assert len(overviews) == 1
+    who = overviews[0][4].description
+    assert "Still need goals:" in who and "<@1301>" in who.split("Still need goals:")[1]
+    assert db.get_challenge(ch.id).status == "active"
