@@ -21,8 +21,9 @@ def now_local() -> datetime:
 
 
 def lock_time(week: Week) -> datetime:
-    """A week locks at midnight at the end of its last day (Friday, or the challenge's last day)."""
-    return datetime.combine(week.end + timedelta(days=1), time(0, 0), tzinfo=config.TZ)
+    """A week locks at midnight at the end of its last day (Friday, or the challenge's last day), plus the
+    late-night grace window (3 a.m. by default) so a Friday-night check-in after midnight still counts."""
+    return datetime.combine(week.end + timedelta(days=1), time(config.LATE_NIGHT_GRACE_HOUR, 0), tzinfo=config.TZ)
 
 
 def checkin_allowed(challenge: Challenge, day: date, now: datetime) -> tuple[bool, str]:

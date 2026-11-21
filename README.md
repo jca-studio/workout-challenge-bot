@@ -66,6 +66,8 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
+| Someone needs a nudge | `/commish warn` pings and DMs everyone without 3 goals right away ("by tonight" or "by tomorrow", depending on the deadline) |
+| Someone drops out | Players can run `/challenge leave`. The commissioner can run `/commish remove` (type REMOVE to confirm). Either way her points stop counting and team averages are recalculated |
 | After the last day | At 9 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
 
 **Team or individual:** 8 or more players makes teams, fewer is individual. To override, use `/challenge lock mode:teams` or `mode:individual`.
@@ -84,6 +86,8 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 - **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too.
 - **Check in without a photo:** `/checkin`, or tap the button in the 8 p.m. reminder.
 - **Log an earlier day:** `/checkin` and pick the day. This works until Friday at midnight.
+- **Late nights:** a photo posted before 3 a.m. offers buttons for yesterday as well as today, and each week stays open until 3 a.m. Saturday.
+- **Dropping out:** `/challenge leave`.
 - **Feedback:** `/feedback` sends the organizer a private note, with an option to stay anonymous.
 - **Other commands:**
   - `/mystats` shows your week, with progress like ✅✅⬜
@@ -137,6 +141,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | `WARNING_HOUR` | `20` | 0–23, when the removal warning posts the night before the deadline |
 | `REMOVE_WITHOUT_GOALS` | `true` | `false` keeps players without goals instead of removing them |
 | `AUTO_APPROVE_AT_LOCK` | `true` | `false` makes the commissioner approve goals by hand |
+| `LATE_NIGHT_GRACE_HOUR` | `3` | Until this hour, photos can count for the day before |
 | `GOAL_NUDGE_DAYS` | `3` | How many days before the deadline to start DMing players without goals |
 | `TEAM_NAMES` | `Bad Bitches,Muscle Mamis` | Two names, separated by a comma |
 | `WINNER_ROLE_NAME` / `TOP_SCORER_ROLE_NAME` | `Challenge Champion` / `That Girl` | Any role name |
@@ -153,7 +158,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 73 tests, including a simulated month
+python -m pytest                 # 76 tests, including a simulated month
 DISCORD_TOKEN=... python -m bot.main
 ```
 

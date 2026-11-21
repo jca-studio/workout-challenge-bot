@@ -39,7 +39,8 @@ def test_checkin_lock_rules():
     mon = date(2026, 12, 7)  # week Dec 5-11
     assert game.checkin_allowed(ch, mon, at(date(2026, 12, 9)))[0]          # Wednesday: fine
     assert game.checkin_allowed(ch, mon, at(date(2026, 12, 11), 23))[0]     # Friday 11 p.m.: fine
-    assert not game.checkin_allowed(ch, mon, at(date(2026, 12, 12), 0))[0]  # Saturday 12:00 a.m.: locked
+    assert game.checkin_allowed(ch, mon, at(date(2026, 12, 12), 1))[0]      # Saturday 1 a.m.: late-night window
+    assert not game.checkin_allowed(ch, mon, at(date(2026, 12, 12), 3))[0]  # Saturday 3 a.m.: locked
     assert not game.checkin_allowed(ch, date(2026, 12, 10), at(date(2026, 12, 9)))[0]  # future
     assert not game.checkin_allowed(ch, date(2026, 11, 30), at(date(2026, 12, 2)))[0]  # before start
 

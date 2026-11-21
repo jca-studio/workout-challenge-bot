@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import discord
+import pytest
 
 os.environ["DATABASE_PATH"] = "/tmp/momsbot-test/flow.db"
 if os.path.exists(os.environ["DATABASE_PATH"]):
@@ -743,3 +744,124 @@ def test_feedback_form_reaches_owner(monkeypatch):
         run(form.on_submit(i))
         assert sent[-1].startswith(f"💬 **Feedback** from {expect} in **Moms**")
         assert "Thank you" in i.response.sent[0][0]
+
+
+class FakeMessage:
+    def __init__(self, guild, channel, uid):
+        self.author = SimpleNamespace(id=uid, bot=False)
+        self.guild, self.channel = guild, channel
+        self.attachments = [object()]
+        self.replies, self.reactions = [], []
+
+    async def reply(self, content=None, **kw):
+        self.replies.append((content, kw))
+
+    async def add_reaction(self, e):
+        self.reactions.append(e)
+
+
+def test_late_night_photo_offers_yesterday(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 44
+    db.set_settings(44, 10, 11, None)
+    ch = db.create_challenge(44, "Mar", date(2029, 3, 1), date(2029, 3, 31), 99)
+    db.join(ch.id, 1500)
+    db.set_goals(ch.id, 1500, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    run = asyncio.new_event_loop().run_until_complete
+
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2029, 3, 7), 1))  # 1 a.m. Wednesday
+    msg = FakeMessage(guild, guild.proof, 1500)
+    run(main.on_message(msg))
+    labels = [b.label for b in msg.replies[0][1]["view"].children]
+    assert labels[:3] == ["Run (yesterday)", "Read (yesterday)", "Sleep (yesterday)"]
+    assert labels[3:6] == ["Run (today)", "Read (today)", "Sleep (today)"]
+    yesterday_run = msg.replies[0][1]["view"].children[0].custom_id
+    assert yesterday_run.endswith(":2029-03-06")
+
+    # Tapping it logs Tuesday, not Wednesday
+    i = fake_inter(guild, 1500)
+    i.channel_id = 11
+    async def edit(**kw):
+        pass
+    i.message = SimpleNamespace(reference=SimpleNamespace(message_id=9), jump_url="x", content="", edit=edit)
+    parts = yesterday_run.split(":")
+    run(main.handle_proof_button(i, int(parts[2]), parts[3], parts[4], parts[5]))
+    assert "Tue Mar 6" in i.response.sent[0][0]
+    run_goal = db.goals(ch.id, 1500)[0]
+    assert db.checkin_days(run_goal.id, date(2029, 3, 1), date(2029, 3, 31)) == {date(2029, 3, 6)}
+
+    # Midday: only today
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2029, 3, 7), 13))
+    msg2 = FakeMessage(guild, guild.proof, 1500)
+    run(main.on_message(msg2))
+    assert [b.label for b in msg2.replies[0][1]["view"].children][:3] == ["Run", "Read", "Sleep"]
+
+
+def test_commish_warn_says_tonight(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 45
+    db.set_settings(45, 10, 11, None)
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    dms = []
+
+    class U:
+        def __init__(self, uid):
+            self.uid = uid
+
+        async def send(self, content=None, **kw):
+            dms.append((self.uid, content))
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: U(uid))
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2026, 11, 21), 10))
+    ch = db.create_challenge(45, "Nov Sprint", date(2026, 11, 22), date(2026, 12, 21), 99,
+                             signup_deadline=date(2026, 11, 21))
+    db.join(ch.id, 1601)
+    db.join(ch.id, 1602)
+    db.set_goals(ch.id, 1602, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    i = fake_inter(guild, 99)
+    i.followup = FakeResponse()
+    i.followup.send = i.followup.send_message
+
+    async def defer(**kw):
+        pass
+    i.response.defer = defer
+    asyncio.new_event_loop().run_until_complete(main.commish_warn.callback(i))
+    post = guild.ann.sent[-1][0]
+    assert "<@1601>" in post and "<@1602>" not in post and "11:59 p.m. ET tonight" in post
+    assert dms == [(1601, dms[0][1])] and "tonight" in dms[0][1]
+    assert "Warned 1 player" in i.followup.sent[0][0]
+
+
+def test_leaving_mid_challenge_drops_from_scoring(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 46
+    db.set_settings(46, 10, 11, None)
+    monkeypatch.setattr(main, "notify_owner", lambda text: asyncio.sleep(0))
+    ch = db.create_challenge(46, "Apr", date(2029, 4, 7), date(2029, 4, 13), 99)  # one Sat-Fri week
+    for uid, team in ((1701, "A"), (1702, "A"), (1703, "B"), (1704, "B")):
+        db.join(ch.id, uid)
+        db.set_team(ch.id, uid, team)
+        db.set_goals(ch.id, uid, [("Run", 1), ("Read", 1), ("Sleep", 1)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active", mode="teams")
+    for uid in (1701, 1703, 1704):  # 1702 does nothing
+        for g in db.goals(ch.id, uid):
+            db.add_checkin(g.id, uid, date(2029, 4, 8), None)
+    ch = db.get_challenge(ch.id)
+    before = game.standings(db, ch).team_total("A")
+    run = asyncio.new_event_loop().run_until_complete
+
+    i = fake_inter(guild, 1702)
+    run(main.challenge_leave.callback(i))
+    assert "Your points so far will stop counting" in i.response.sent[0][0]
+    confirm = fake_inter(guild, 1702)
+    run(main.handle_quit(confirm, ch.id))
+    assert "You've left" in confirm.response.sent[0][0]
+    s = game.standings(db, ch)
+    assert 1702 not in s.player_weeks
+    # Before: (4 + 0) / 2 = 2. After: 1701 alone, perfect (3 + 1) and her team is now all-perfect (+1) = 5
+    assert before == pytest.approx(2.0) and s.team_total("A") == pytest.approx(5.0)

@@ -492,6 +492,7 @@ def proof_feedback_embed(guild: discord.Guild) -> discord.Embed:
     e.add_field(name="When", inline=False, value=(
         "Anytime that day. Forgot? You can log any day of the current week until **Friday at midnight** "
         f"{tz_label()}. After that the week locks; ask the commissioner if something was missed. "
+        f"Night owls: a photo posted before {hour_label(config.LATE_NIGHT_GRACE_HOUR)} can count for the day before. "
         "Mini missions have 24 hours from when they post."))
     e.add_field(name="Feedback about the challenge", inline=False, value=(
         "Something confusing, a bug, or an idea? Use `/feedback` to send a private note to the organizer. "
@@ -629,6 +630,31 @@ async def challenge_overview(inter: discord.Interaction, send_to: str = "channel
         msg += (" Couldn't reach " + " ".join(failed) + " (DMs off). Post it in the channel too, or ask them to "
                 "turn on DMs from this server.")
     await inter.followup.send(msg, ephemeral=True)
+
+
+@challenge_group.command(name="leave", description="Drop out of the current challenge.")
+async def challenge_leave(inter: discord.Interaction):
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or not db.is_player(ch.id, inter.user.id):
+        return await deny(inter, "You're not in the current challenge.")
+    note = (" Your points so far will stop counting, and you won't be able to rejoin this challenge."
+            if ch.status in ("ready", "active") else "")
+    button = discord.ui.Button(label="Yes, leave the challenge", style=discord.ButtonStyle.danger,
+                               custom_id=f"mb:quit:{ch.id}")
+    await inter.response.send_message(f"Are you sure you want to leave **{ch.name}**?{note}",
+                                      view=make_view([button]), ephemeral=True)
+
+
+async def handle_quit(inter: discord.Interaction, challenge_id: int):
+    ch = db.get_challenge(challenge_id)
+    if not ch or not db.is_player(ch.id, inter.user.id):
+        return await deny(inter, "You're not in that challenge anymore.")
+    await remove_player(inter.guild, ch, inter.user.id)
+    if ch.status == "signup":
+        await refresh_signup(inter.guild, ch)
+    await notify_owner(f"🚪 <@{inter.user.id}> left **{ch.name}** in **{inter.guild.name}**.")
+    await inter.response.send_message("You've left the challenge. We'll miss you! Catch the next one. 💕",
+                                      ephemeral=True)
 
 
 bot.tree.add_command(challenge_group)
@@ -972,9 +998,19 @@ async def on_message(message: discord.Message):
     if not ch or ch.status != "active" or not db.is_player(ch.id, message.author.id):
         return
     now = game.now_local()
-    buttons = [discord.ui.Button(label=g.name[:80], emoji="✅", style=discord.ButtonStyle.primary,
-                                 custom_id=f"mb:p:{message.author.id}:g:{g.id}")
-               for g in game.open_goals_today(db, ch, message.author.id, now.date())] if in_proof else []
+    buttons = []
+    if in_proof:
+        days = [now.date()]
+        if now.hour < config.LATE_NIGHT_GRACE_HOUR:  # after midnight: offer yesterday first
+            days.insert(0, now.date() - timedelta(days=1))
+        for d in days:
+            if not game.checkin_allowed(ch, d, now)[0]:
+                continue
+            tag = " (yesterday)" if d < now.date() else (" (today)" if len(days) > 1 else "")
+            for g in game.open_goals_today(db, ch, message.author.id, d):
+                buttons.append(discord.ui.Button(label=(g.name[:60] + tag), emoji="✅",
+                                                 style=discord.ButtonStyle.primary,
+                                                 custom_id=f"mb:p:{message.author.id}:g:{g.id}:{d.isoformat()}"))
     m = game.open_mission(db, ch, now)
     done_days = {d for d, _ in db.mission_completions(ch.id, message.author.id)}
     if m and date.fromisoformat(m["day"]) not in done_days:
@@ -1256,6 +1292,52 @@ async def commish_mission_points(inter: discord.Interaction, member: discord.Mem
     await inter.response.send_message(f"{member.mention}'s mini mission for {pretty(d)}: {fmt(points)} pts.", ephemeral=True)
 
 
+@commish.command(name="warn", description="Ping and DM everyone without 3 goals: goals by the deadline or they're removed.")
+async def commish_warn(inter: discord.Interaction):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or ch.status != "signup":
+        return await deny(inter, "There's no challenge taking sign-ups.")
+    await inter.response.defer(ephemeral=True)
+    deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
+    n = await warn_missing_goals(inter.guild, ch, deadline, channel(inter.guild, "announce_channel_id"))
+    db.mark_job(ch.id, "goal_warning", game.now_local().date().isoformat())
+    await inter.followup.send(f"Warned {n} player{'s' if n != 1 else ''} without goals." if n
+                              else "Everyone has their goals in. Nobody to warn! 🎉", ephemeral=True)
+
+
+async def remove_player(guild: discord.Guild, ch: Challenge, uid: int):
+    """Take someone out of the challenge: her goals, check-ins and points stop counting, and team averages
+    are recalculated without her."""
+    team = next((p["team"] for p in db.players(ch.id) if p["user_id"] == uid), None)
+    db.leave(ch.id, uid)
+    if team:
+        try:
+            role = discord.utils.get(guild.roles, name=team)
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+            if role and member:
+                await member.remove_roles(role, reason="Left the challenge")
+        except Exception:
+            log.info("couldn't remove team role from %s", uid)
+
+
+@commish.command(name="remove", description="Remove a player from the challenge (her points stop counting).")
+async def commish_remove_player(inter: discord.Interaction, member: discord.Member, confirm: str):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or not db.is_player(ch.id, member.id):
+        return await deny(inter, f"{member.display_name} isn't in the current challenge.")
+    if confirm != "REMOVE":
+        return await deny(inter, "Nothing changed. Type REMOVE in the confirm box to remove her.")
+    await remove_player(inter.guild, ch, member.id)
+    await dm(member.id, f"You've been removed from **{ch.name}** in {inter.guild.name} by the commissioner. "
+                        "Reach out to her if you have questions. 💕")
+    await inter.response.send_message(f"Removed {member.mention} from {ch.name}. Her points no longer count.",
+                                      ephemeral=True)
+
+
 @commish.command(name="post-standings", description="Post the current standings now.")
 async def commish_post(inter: discord.Interaction):
     if not is_commish(inter):
@@ -1285,12 +1367,14 @@ async def on_interaction(inter: discord.Interaction):
             await handle_signup(inter, int(parts[2]), kind == "join")
         elif kind == "who":
             await handle_who(inter, int(parts[2]))
+        elif kind == "quit":
+            await handle_quit(inter, int(parts[2]))
         elif kind == "approveall":
             await handle_approve_all(inter, int(parts[2]))
         elif kind in ("goals", "addgoal"):
             await handle_goals_button(inter, int(parts[2]))
         elif kind == "p":
-            await handle_proof_button(inter, int(parts[2]), parts[3], parts[4])
+            await handle_proof_button(inter, int(parts[2]), parts[3], parts[4], parts[5] if len(parts) > 5 else None)
         elif kind in ("yes", "no"):
             await handle_reminder(inter, int(parts[2]), date.fromisoformat(parts[3]), kind == "yes")
     except Exception:
@@ -1352,7 +1436,7 @@ async def handle_who(inter: discord.Interaction, challenge_id: int):
                                       allowed_mentions=discord.AllowedMentions.none())
 
 
-async def handle_proof_button(inter: discord.Interaction, owner: int, what: str, ref: str):
+async def handle_proof_button(inter: discord.Interaction, owner: int, what: str, ref: str, day: str | None = None):
     if inter.user.id != owner:
         return await deny(inter, "Only the person who posted this can tap these. 😉")
     ch = db.current_challenge(inter.guild_id)
@@ -1366,7 +1450,7 @@ async def handle_proof_button(inter: discord.Interaction, owner: int, what: str,
         g = db.goal(int(ref))
         if not g or g.user_id != owner:
             return await deny(inter, "That goal isn't yours.")
-        result = await log_checkin(ch, inter.user, g, today, proof_url, inter.guild)
+        result = await log_checkin(ch, inter.user, g, date.fromisoformat(day) if day else today, proof_url, inter.guild)
     else:
         result = complete_mission(ch, owner, proof_url, date.fromisoformat(ref))
     await inter.response.send_message(result, ephemeral=True)
@@ -1428,7 +1512,7 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
         deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
         if (deadline - today).days == 1 and not db.job_done(ch.id, "goal_warning", key):
             db.mark_job(ch.id, "goal_warning", key)
-            await warn_missing_goals(guild, ch, deadline, ann)
+            await warn_missing_goals(guild, ch, deadline, ann, today)
 
     # The what-to-expect overview, posted the day before the challenge starts.
     if (ch.status in ("signup", "ready") and today == ch.start - timedelta(days=1)
@@ -1490,12 +1574,15 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
         await finish(guild, ch, ann)
 
 
-async def warn_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, ann):
+async def warn_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, ann, today: date | None = None) -> int:
     """The night before the deadline: warn (and ping) everyone without 3 goals that they'll be removed."""
     missing = [p["user_id"] for p in db.players(ch.id) if len(db.goals(ch.id, p["user_id"])) < 3]
     if not missing:
-        return
-    when = f"11:59 p.m. {tz_label()} tomorrow ({pretty(deadline)})"
+        return 0
+    days_left = (deadline - (today or game.now_local().date())).days
+    when = (f"11:59 p.m. {tz_label()} tonight" if days_left <= 0 else
+            f"11:59 p.m. {tz_label()} tomorrow ({pretty(deadline)})" if days_left == 1 else
+            f"11:59 p.m. {tz_label()} {pretty(deadline)}")
     rule = "you'll be removed from the challenge" if config.REMOVE_WITHOUT_GOALS else "you won't be able to play"
     if ann:
         await ann.send(
@@ -1508,6 +1595,7 @@ async def warn_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date
                                    custom_id=f"mb:goals:{ch.id}")
         await dm(uid, f"⚠️ Heads up: your goals for **{ch.name}** in {guild.name} are due by **{when}**. "
                       f"If they're not in, {rule}. Tap below to add them now.", make_view([button]))
+    return len(missing)
 
 
 async def nudge_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, today: date):

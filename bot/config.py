@@ -52,3 +52,7 @@ TEAM_BONUS_PER_PLAYER = float(_env("TEAM_BONUS_PER_PLAYER", "1"))
 
 # Who gets install alerts and can run /botstats. Defaults to the bot's owner in the Developer Portal.
 OWNER_ID = int(_env("OWNER_ID", "0") or 0)
+
+# Photos posted between midnight and this hour can count for the day before, and each week stays open
+# until this hour on Saturday morning, so late-night check-ins aren't lost.
+LATE_NIGHT_GRACE_HOUR = int(_env("LATE_NIGHT_GRACE_HOUR", "3"))
