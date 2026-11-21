@@ -57,9 +57,12 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | Every day during sign-ups | At 10 a.m. the bot posts a reminder with a countdown, a link to the sign-up post, who's in, and who still needs goals (names show, nobody gets pinged). It stops when sign-ups close |
 | During sign-ups | Players tap **I'm in**, then **Add my goals**, which opens one form for all 3 goals, each written like "Yoga, 3 days" or "Affirmations, every day" (`/goals set` opens the same form). Check who's missing with `/challenge status` |
 | Last 3 days before the deadline | The bot DMs anyone signed up without 3 goals, once a day, with an **Add my goals** button |
-| The day before the start | At noon the bot posts the overview by itself. To send it earlier, or by DM, run `/challenge overview` |
+| The night before the deadline | At 8 p.m. the bot posts a warning that pings anyone without 3 goals (and DMs them): goals by the deadline, or they're removed |
+| The night before the start | At 7 p.m. the bot posts the overview by itself, including whether it's team or solo. To send it earlier, or by DM, run `/challenge overview` |
+| At the deadline | Players without 3 goals are removed and DM'd, everyone else's goals are approved, the mode is set and teams are made |
+| Morning of day one | At 7 a.m. the bot posts the kickoff welcome (teams, what to do today, proof, feedback, commands), then the first mini mission |
 | Anytime | `/challenge overview` posts a what-to-expect message in the announce channel (or `send_to: DM every player`): how it works, points, reminders and the daily schedule, commands, and everyone's goals |
-| Before the start date | `/goals all` shows everyone's goals in one list. Tap **Approve all**, or approve one person with `/commish approve member:@name` |
+| Before the deadline (optional) | `/goals all` shows everyone's goals. Goals are approved automatically at the deadline, so you only need this to review them |
 | At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
@@ -81,6 +84,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 - **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too.
 - **Check in without a photo:** `/checkin`, or tap the button in the 8 p.m. reminder.
 - **Log an earlier day:** `/checkin` and pick the day. This works until Friday at midnight.
+- **Feedback:** `/feedback` sends the organizer a private note, with an option to stay anonymous.
 - **Other commands:**
   - `/mystats` shows your week, with progress like ✅✅⬜
   - `/leaderboard` shows everyone's standings
@@ -129,7 +133,10 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | `REMINDER_HOUR` | `20` | 0–23 |
 | `ROUNDUP_HOUR` | `8` | 0–23, when the daily roundup posts |
 | `SIGNUP_REMINDER_HOUR` | `10` | 0–23, when the daily sign-up reminder posts |
-| `OVERVIEW_HOUR` | `12` | 0–23, when the overview posts the day before the start |
+| `OVERVIEW_HOUR` | `19` | 0–23, when the overview posts the night before the start |
+| `WARNING_HOUR` | `20` | 0–23, when the removal warning posts the night before the deadline |
+| `REMOVE_WITHOUT_GOALS` | `true` | `false` keeps players without goals instead of removing them |
+| `AUTO_APPROVE_AT_LOCK` | `true` | `false` makes the commissioner approve goals by hand |
 | `GOAL_NUDGE_DAYS` | `3` | How many days before the deadline to start DMing players without goals |
 | `TEAM_NAMES` | `Bad Bitches,Muscle Mamis` | Two names, separated by a comma |
 | `WINNER_ROLE_NAME` / `TOP_SCORER_ROLE_NAME` | `Challenge Champion` / `That Girl` | Any role name |
@@ -146,7 +153,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 72 tests, including a simulated month
+python -m pytest                 # 73 tests, including a simulated month
 DISCORD_TOKEN=... python -m bot.main
 ```
 

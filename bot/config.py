@@ -18,8 +18,12 @@ MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "7"))    # daily mini mission
 STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "9"))          # final standings after the last day
 ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "8"))              # daily roundup of yesterday
 SIGNUP_REMINDER_HOUR = int(_env("SIGNUP_REMINDER_HOUR", "10"))  # daily nudge while sign-ups are open
-OVERVIEW_HOUR = int(_env("OVERVIEW_HOUR", "12"))           # what-to-expect post, the day before the start
+OVERVIEW_HOUR = int(_env("OVERVIEW_HOUR", "19"))           # what-to-expect post, the night before the start
 GOAL_NUDGE_DAYS = int(_env("GOAL_NUDGE_DAYS", "3"))        # DM players without goals this many days before the deadline
+WARNING_HOUR = int(_env("WARNING_HOUR", "20"))             # removal warning, the night before the deadline
+# At the deadline: remove players without 3 goals, and approve everyone else's goals automatically.
+REMOVE_WITHOUT_GOALS = _env("REMOVE_WITHOUT_GOALS", "true").lower() == "true"
+AUTO_APPROVE_AT_LOCK = _env("AUTO_APPROVE_AT_LOCK", "true").lower() == "true"
 MISSION_WINDOW_HOURS = int(_env("MISSION_WINDOW_HOURS", "24"))
 
 TEAM_MODE_MIN_PLAYERS = int(_env("TEAM_MODE_MIN_PLAYERS", "8"))

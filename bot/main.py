@@ -352,11 +352,23 @@ async def challenge_lock(inter: discord.Interaction, mode: str = "auto"):
 
 
 async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") -> discord.Embed:
-    """Close sign-ups, pick the mode and make teams. Runs from /challenge lock, or by itself on the start date."""
+    """Close sign-ups: remove players without 3 goals, approve the rest, pick the mode and make teams.
+    Runs from /challenge lock, or by itself at the deadline."""
+    lines = []
+    everyone = [p["user_id"] for p in db.players(ch.id)]
+    no_goals = [u for u in everyone if len(db.goals(ch.id, u)) < 3]
+    if config.REMOVE_WITHOUT_GOALS and no_goals and len(everyone) - len(no_goals) >= 2:
+        for uid in no_goals:
+            db.leave(ch.id, uid)
+            await dm(uid, f"😢 You were removed from **{ch.name}** in {guild.name} because your 3 goals weren't in "
+                          "by the deadline. We'd love to have you next time! Watch for the next sign-up post. 💕")
+        lines.append("Removed (no goals by the deadline): " + " ".join(f"<@{u}>" for u in no_goals))
+        no_goals = []
     players = [p["user_id"] for p in db.players(ch.id)]
+    if config.AUTO_APPROVE_AT_LOCK:
+        db.approve_goals(ch.id)
     chosen = game.choose_mode(len(players), mode)
     db.update_challenge(ch.id, mode=chosen, status="ready")
-    lines = []
     if chosen == "teams":
         teams = game.assign_teams(players)
         for uid, team in teams.items():
@@ -367,17 +379,26 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
             lines.append(f"**{team}**\n{members}")
     else:
         lines.append("Everyone plays for herself. Top scorer takes the crown. 👑")
-    missing = [u for u in players if len(db.goals(ch.id, u)) < 3]
-    if missing:
-        lines.append("Still need goals (`/goals set`): " + " ".join(f"<@{u}>" for u in missing))
+    if no_goals:
+        lines.append("Still need goals (`/goals set`): " + " ".join(f"<@{u}>" for u in no_goals))
     unapproved = [u for u in players if any(not g.approved for g in db.goals(ch.id, u))]
     if unapproved:
-        lines.append("Commissioner, these goals need approval (`/commish approve`): "
-                     + " ".join(f"<@{u}>" for u in unapproved))
+        lines.append("Commissioner, these goals need approval (`/goals all`): " + " ".join(f"<@{u}>" for u in unapproved))
     lines.append(f"The challenge starts **{pretty(ch.start)}**.")
     await refresh_signup(guild, ch, closed=True)
     return discord.Embed(title=f"Sign-ups closed: {len(players)} players, {chosen} mode",
                          description="\n\n".join(lines), color=PINK)
+
+
+async def dm(user_id: int, text: str, view: discord.ui.View | None = None) -> bool:
+    """DM a player. Returns False if her DMs are closed (or anything else goes wrong)."""
+    try:
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        await user.send(text, view=view) if view else await user.send(text)
+        return True
+    except Exception:
+        log.info("couldn't DM %s", user_id)
+        return False
 
 
 async def sync_team_roles(guild: discord.Guild, teams: dict[int, str]):
@@ -426,6 +447,84 @@ async def challenge_cancel(inter: discord.Interaction, confirm: str):
     await inter.response.send_message(f"{ch.name} is cancelled.")
 
 
+def mode_line(ch: Challenge) -> str:
+    """Team or solo: final once sign-ups close, otherwise where it's headed based on who has goals."""
+    if ch.mode == "teams":
+        return f"💪🏾 It's **team mode**: **{' vs '.join(config.TEAM_NAMES)}**. Teams are listed below."
+    if ch.mode == "individual":
+        return "👑 It's **individual mode**: everyone plays for herself."
+    ready = sum(1 for p in db.players(ch.id) if len(db.goals(ch.id, p["user_id"])) >= 3)
+    deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
+    headed = (f"**team mode** ({config.TEAM_MODE_MIN_PLAYERS}+ players)" if ready >= config.TEAM_MODE_MIN_PLAYERS
+              else f"**individual mode** (team mode needs {config.TEAM_MODE_MIN_PLAYERS}+)")
+    removal = " Anyone without 3 goals by then is removed." if config.REMOVE_WITHOUT_GOALS else ""
+    return (f"👯‍♀️ **{ready} player{'s' if ready != 1 else ''} with goals so far**, so we're headed for {headed}. "
+            f"It's final when sign-ups close at 11:59 p.m. {tz_label()} {pretty(deadline)}.{removal}")
+
+
+def commands_embed() -> discord.Embed:
+    return discord.Embed(title="⌨️ Commands to know", color=GOLD, description=(
+        "`/goals set` · fill in or edit your 3 goals (before the start)\n"
+        "`/goals view` · see your goals, or someone else's\n"
+        "`/checkin` · log a goal, for today or an earlier day this week\n"
+        "`/mission today` · see today's mini mission\n"
+        "`/mission done` · mark the mini mission done\n"
+        "`/mystats` · your week so far and your total\n"
+        "`/leaderboard` · everyone's standings\n"
+        "`/feedback` · send the organizer a private note\n"
+        "`/howtoplay` · the rules in one message"))
+
+
+def proof_feedback_embed(guild: discord.Guild) -> discord.Embed:
+    proof = channel(guild, "proof_channel_id")
+    missions = mission_channel(guild)
+    where = proof.mention if proof else "the proof channel"
+    photo = {"required": "**A photo is required** for every check-in.",
+             "per_goal": "Some goals need a photo; the commissioner will tell you which.",
+             }.get(config.PHOTO_MODE, "Photos are **encouraged, not required**. No photo? Use `/checkin` or the "
+                                      "buttons in the 8 p.m. reminder.")
+    e = discord.Embed(title="📸 Proof and 💬 feedback", color=PINK)
+    e.add_field(name="How to submit proof", inline=False, value=(
+        f"Post a photo in {where} and tap the goal it's for. That counts as your check-in. "
+        f"Or use `/checkin` and attach a photo. {photo}\n"
+        f"Mini mission proof: post it in {missions.mention if missions else where} and tap **Today's mini mission**, "
+        "or use `/mission done`."))
+    e.add_field(name="When", inline=False, value=(
+        "Anytime that day. Forgot? You can log any day of the current week until **Friday at midnight** "
+        f"{tz_label()}. After that the week locks; ask the commissioner if something was missed. "
+        "Mini missions have 24 hours from when they post."))
+    e.add_field(name="Feedback about the challenge", inline=False, value=(
+        "Something confusing, a bug, or an idea? Use `/feedback` to send a private note to the organizer. "
+        "You can stay anonymous."))
+    return e
+
+
+def kickoff_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
+    """Day one, first thing: it's on, here are the teams, here's what to do today."""
+    missions = mission_channel(guild)
+    tz = tz_label()
+    e = discord.Embed(title=f"🎉 {ch.name} is officially ON!", color=PINK, description=(
+        f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}** · Let's get it! 🔥\n\n{mode_line(ch)}"))
+    teams = db.teams(ch.id)
+    if ch.mode == "teams" and teams:
+        for team in config.TEAM_NAMES:
+            members = " ".join(f"<@{u}>" for u, t in teams.items() if t == team)
+            e.add_field(name=team, value=members[:1024] or "—", inline=True)
+    else:
+        e.add_field(name=f"Players ({len(db.players(ch.id))})", inline=False,
+                    value=(" ".join(f"<@{p['user_id']}>" for p in db.players(ch.id)) or "—")[:1024])
+    e.add_field(name="✅ Your day one", inline=False, value=(
+        "1. **Do your goals** and check in: post a photo in the proof channel and tap the goal.\n"
+        "2. **Do today's mini mission**, posting right after this"
+        + (f" in {missions.mention}" if missions else "") + ".\n"
+        f"3. Haven't checked in by **{hour_label(config.REMINDER_HOUR)} {tz}**? I'll DM you a reminder.\n"
+        f"4. Tomorrow at **{hour_label(config.ROUNDUP_HOUR)} {tz}**: your first morning roundup."))
+    e.add_field(name="💋 Points in one line", inline=False, value=(
+        f"Up to 1 point per goal each week, +{fmt(config.PERFECT_WEEK_BONUS)} for a perfect week, plus mini mission "
+        "bonus points. `/howtoplay` has the full rules."))
+    return [e, proof_feedback_embed(guild), commands_embed()]
+
+
 def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     """Everything a player needs before the start: how it works, points, reminders, commands, and who's in."""
     tz = tz_label()
@@ -433,12 +532,10 @@ def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     missions = mission_channel(guild)
     proof_name = proof.mention if proof else "the proof channel"
     bonus = fmt(config.PERFECT_WEEK_BONUS)
-    mode = {"teams": f"Team mode: **{' vs '.join(config.TEAM_NAMES)}**",
-            "individual": "Everyone plays for herself"}.get(ch.mode or "", "Teams are set when sign-ups close")
-
+    starts = ("**We start tomorrow!** " if game.now_local().date() == ch.start - timedelta(days=1) else "")
     intro = discord.Embed(title=f"📣 {ch.name}: what to expect", color=PINK, description=(
-        f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}** · {mode}\n\n"
-        "Here's everything you need before we start. Save this post! 💕"))
+        f"🗓️ **{pretty(ch.start)} – {pretty(ch.end)}**\n{mode_line(ch)}\n\n"
+        f"{starts}Here's everything you need. Save this post! 💕"))
     intro.add_field(name="🤖 How the bot works", inline=False, value=(
         "**Set 3 goals** before the start: tap **I'm in** on the sign-up post, then **Add my goals**.\n"
         f"**Check in** by posting a photo in {proof_name} and tapping the goal it's for, or use `/checkin`.\n"
@@ -470,15 +567,9 @@ def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
         "📩 Not getting DMs? Right-click (or long-press) the server → **Privacy Settings** → turn on "
         "**Direct Messages**."))
 
-    commands = discord.Embed(title="⌨️ Commands to know", color=GOLD, description=(
-        "`/goals set` · fill in or edit your 3 goals (before the start)\n"
-        "`/goals view` · see your goals, or someone else's\n"
-        "`/checkin` · log a goal, for today or an earlier day this week\n"
-        "`/mission today` · see today's mini mission\n"
-        "`/mission done` · mark the mini mission done\n"
-        "`/mystats` · your week so far and your total\n"
-        "`/leaderboard` · everyone's standings\n"
-        "`/howtoplay` · the rules in one message"))
+    commands = commands_embed()
+    proof_feedback = proof_feedback_embed(guild)
+
 
     rows, missing = [], []
     for p in db.players(ch.id):
@@ -502,7 +593,7 @@ def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     chunks.append(current)
     players.description = chunks[0]
     extra = [discord.Embed(description=c, color=PINK) for c in chunks[1:]]
-    return [intro, points, reminders, commands, players, *extra]
+    return [intro, points, reminders, proof_feedback, commands, players, *extra]
 
 
 @challenge_group.command(name="overview", description="Commissioner: send players a what-to-expect overview.")
@@ -1085,7 +1176,7 @@ async def howtoplay(inter: discord.Interaction):
            else ". Do them every day to stack up points.\n")
         + "**Deadlines.** Weeks run Saturday–Friday and lock Friday at midnight. A daily roundup with the "
         "leaderboard posts every morning; Saturday's is the week's final.\n"
-        "`/mystats` for your week, `/leaderboard` for everyone."
+        "`/mystats` for your week, `/leaderboard` for everyone. Feedback for the organizer? `/feedback`."
     )
     await inter.response.send_message(text, ephemeral=True)
 
@@ -1326,9 +1417,18 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     # DM players who signed up but haven't set goals, in the last few days before the deadline.
     if ch.status == "signup" and game.signups_open(ch, now) and now.hour >= config.SIGNUP_REMINDER_HOUR:
         deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
-        if (deadline - today).days <= config.GOAL_NUDGE_DAYS and not db.job_done(ch.id, "goal_nudge", key):
+        warning_day = (deadline - today).days == 1  # the night-before warning DMs them instead
+        if ((deadline - today).days <= config.GOAL_NUDGE_DAYS and not warning_day
+                and not db.job_done(ch.id, "goal_nudge", key)):
             db.mark_job(ch.id, "goal_nudge", key)
             await nudge_missing_goals(guild, ch, deadline, today)
+
+    # The removal warning, the night before the deadline.
+    if ch.status == "signup" and game.signups_open(ch, now) and now.hour >= config.WARNING_HOUR:
+        deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
+        if (deadline - today).days == 1 and not db.job_done(ch.id, "goal_warning", key):
+            db.mark_job(ch.id, "goal_warning", key)
+            await warn_missing_goals(guild, ch, deadline, ann)
 
     # The what-to-expect overview, posted the day before the challenge starts.
     if (ch.status in ("signup", "ready") and today == ch.start - timedelta(days=1)
@@ -1357,8 +1457,8 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
         db.update_challenge(ch.id, status="active")
         ch = db.get_challenge(ch.id)
         if ann and not db.job_done(ch.id, "kickoff", "1"):
-            await ann.send(f"🔥 **{ch.name} starts now!** Post proof, tap your goal, and let's get it. "
-                           "`/howtoplay` if you need a refresher.")
+            for page in message_pages(kickoff_embeds(guild, ch)):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
             db.mark_job(ch.id, "kickoff", "1")
     if ch.status != "active":
         return
@@ -1388,6 +1488,26 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")
         await finish(guild, ch, ann)
+
+
+async def warn_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, ann):
+    """The night before the deadline: warn (and ping) everyone without 3 goals that they'll be removed."""
+    missing = [p["user_id"] for p in db.players(ch.id) if len(db.goals(ch.id, p["user_id"])) < 3]
+    if not missing:
+        return
+    when = f"11:59 p.m. {tz_label()} tomorrow ({pretty(deadline)})"
+    rule = "you'll be removed from the challenge" if config.REMOVE_WITHOUT_GOALS else "you won't be able to play"
+    if ann:
+        await ann.send(
+            "⚠️ **Goal deadline warning** ⚠️\n" + " ".join(f"<@{u}>" for u in missing)
+            + f"\nYou're signed up for **{ch.name}**, but your 3 goals aren't in. If they're not submitted by "
+            f"**{when}**, {rule}. Tap **I'm in** on the sign-up post, then **Add my goals**. 💪🏾",
+            allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False))
+    for uid in missing:
+        button = discord.ui.Button(label="Add my goals", emoji="➕", style=discord.ButtonStyle.danger,
+                                   custom_id=f"mb:goals:{ch.id}")
+        await dm(uid, f"⚠️ Heads up: your goals for **{ch.name}** in {guild.name} are due by **{when}**. "
+                      f"If they're not in, {rule}. Tap below to add them now.", make_view([button]))
 
 
 async def nudge_missing_goals(guild: discord.Guild, ch: Challenge, deadline: date, today: date):
@@ -1613,6 +1733,32 @@ def botstats_text(guilds: list[discord.Guild], today: date) -> str:
     if totals["players"]:
         head += f" · {totals['active7']} checked in this past week"
     return (head + "\n\n" + "\n".join(lines))[:2000]
+
+
+class FeedbackForm(discord.ui.Modal):
+    """Private feedback about the challenge or the bot, sent to the organizer by DM."""
+
+    def __init__(self):
+        super().__init__(title="Feedback for the organizer")
+        self.note = discord.ui.TextInput(style=discord.TextStyle.paragraph, max_length=1500,
+                                         placeholder="What's confusing, broken, or could be better? Ideas welcome!")
+        self.anon = discord.ui.Select(options=[
+            discord.SelectOption(label="Include my name", value="named", default=True),
+            discord.SelectOption(label="Send anonymously", value="anon")])
+        self.add_item(discord.ui.Label(text="Your feedback", component=self.note))
+        self.add_item(discord.ui.Label(text="Name or anonymous?", component=self.anon))
+
+    async def on_submit(self, inter: discord.Interaction):
+        anonymous = (self.anon.values or ["named"])[0] == "anon"
+        who = "Anonymous" if anonymous else f"{inter.user.display_name} (<@{inter.user.id}>)"
+        where = inter.guild.name if inter.guild else "a DM"
+        await notify_owner(f"💬 **Feedback** from {who} in **{where}**:\n>>> {self.note.value}")
+        await inter.response.send_message("Thank you! Your feedback went to the organizer. 💕", ephemeral=True)
+
+
+@bot.tree.command(description="Send private feedback about the challenge to the organizer.")
+async def feedback(inter: discord.Interaction):
+    await inter.response.send_modal(FeedbackForm())
 
 
 @bot.tree.command(description="Bot owner only: how many servers use the bot, and how they're doing.")

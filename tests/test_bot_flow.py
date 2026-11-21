@@ -126,13 +126,13 @@ def test_month_of_jobs(monkeypatch):
     texts = [c or "" for c, _ in guild.ann.sent]
     embeds = [kw.get("embed") for _, kw in guild.ann.sent if kw.get("embed")]
     roundups = [kw["embeds"] for _, kw in guild.ann.sent
-                if kw.get("embeds") and not kw["embeds"][0].title.endswith("what to expect")]
+                if kw.get("embeds") and not kw["embeds"][0].title.endswith(("what to expect", "is officially ON!"))]
     overviews = [kw["embeds"] for _, kw in guild.ann.sent
                  if kw.get("embeds") and kw["embeds"][0].title.endswith("what to expect")]
     assert len(overviews) == 1  # posted on Nov 30, the day before the start
     missions = [kw["embed"] for _, kw in guild.missions.sent]
     assert ch.status == "finished"
-    assert any("starts now" in t for t in texts)
+    assert any(kw.get("embeds") and kw["embeds"][0].title.endswith("is officially ON!") for _, kw in guild.ann.sent)
     # 31 missions, all in the mini mission channel, none in the announce channel
     assert len(missions) == 31 and all(e.title.startswith("⚡") for e in missions)
     assert not any(e.title.startswith("⚡") for e in embeds)
@@ -616,7 +616,8 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
     embeds = main.overview_embeds(guild, ch)
     titles = [e.title for e in embeds]
     assert titles == ["📣 December Challenge: what to expect", "💋 How points work",
-                      "⏰ Reminders and the daily schedule", "⌨️ Commands to know", "👯‍♀️ Who's playing (3)"]
+                      "⏰ Reminders and the daily schedule", "📸 Proof and 💬 feedback", "⌨️ Commands to know",
+                      "👯‍♀️ Who's playing (3)"]
     who = embeds[-1].description
     assert "**<@1201>**: Yoga, 3 days · Affirmations, every day · Read, 5 days" in who
     assert "**Still need goals:** <@1203>" in who
@@ -636,7 +637,7 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
     a = inter()
     run(main.challenge_overview.callback(a, "channel"))
     assert "Posted the overview" in a.followup.sent[0][0]
-    assert len(guild.ann.sent[-1][1]["embeds"]) == 5
+    assert sum(len(kw["embeds"]) for _, kw in guild.ann.sent if kw.get("embeds")) == 6
 
     dms = []
 
@@ -655,11 +656,12 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
     assert "DM'd the overview to 2 players" in b.followup.sent[0][0] and "<@1202>" in b.followup.sent[0][0]
 
 
-def test_goal_nudges_and_day_before_overview(monkeypatch):
+def test_lead_up_warning_overview_removal_and_kickoff(monkeypatch):
     db = main.db
     guild = FakeGuild()
     guild.id = 66
-    db.set_settings(66, 10, 11, None)
+    db.set_settings(66, 10, 11, None, mission=12)
+    db.import_missions(66, CSV)
     monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
     dms = []
 
@@ -668,32 +670,76 @@ def test_goal_nudges_and_day_before_overview(monkeypatch):
             self.uid = uid
 
         async def send(self, content=None, **kw):
-            dms.append((self.uid, content, kw.get("view")))
+            dms.append((self.uid, content or "", kw.get("view")))
     monkeypatch.setattr(main.bot, "get_user", lambda uid: U(uid))
-    ch = db.create_challenge(66, "February Challenge", date(2029, 2, 1), date(2029, 2, 28), 99)  # deadline: Jan 31
-    for uid in (1301, 1302, 1303):
+    # Starts Thu Feb 1 2029; sign-ups and goals due Wed Jan 31
+    ch = db.create_challenge(66, "February Challenge", date(2029, 2, 1), date(2029, 2, 28), 99,
+                             signup_deadline=date(2029, 1, 31))
+    ready = list(range(1300, 1309))  # 9 with goals -> team mode
+    for uid in ready:
         db.join(ch.id, uid)
-    db.add_goal(ch.id, 1302, "Yoga", 3, False)  # 1 of 3
-    db.set_goals(ch.id, 1303, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)  # done
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    db.join(ch.id, 1399)               # never sets goals -> warned, then removed
     run = asyncio.new_event_loop().run_until_complete
-    d = date(2029, 1, 25)
+    d = date(2029, 1, 27)
     while d <= date(2029, 2, 1):
-        for hour in (9, 10, 12, 15):
+        for hour in (0, 9, 10, 12, 19, 20, 21):
             run(main.run_jobs(guild, db.get_challenge(ch.id), at(d, hour)))
         d += timedelta(days=1)
 
-    # Nudges: Jan 28, 29, 30, 31 (3, 2, 1, 0 days before the deadline), only to the two without 3 goals
-    assert len(dms) == 8 and {u for u, _, _ in dms} == {1301, 1302}
-    first_1301 = next(c for u, c, _ in dms if u == 1301)
-    assert "haven't set your goals yet" in first_1301 and "Wed Jan 31 at 11:59 p.m." in first_1301
-    assert "only set 1 of 3 goals" in next(c for u, c, _ in dms if u == 1302)
-    assert "tonight at 11:59 p.m." in dms[-1][1]
-    assert dms[0][2].children[0].custom_id == f"mb:goals:{ch.id}"
+    mine = [(c, v) for u, c, v in dms if u == 1399]
+    # Nudges Jan 28, 29 and 31 (3, 2 and 0 days out); the warning DM replaces the Jan 30 nudge; then removal
+    assert sum("Goals are due" in c for c, _ in mine) == 3
+    warning_dm = next(c for c, _ in mine if c.startswith("⚠️"))
+    assert "11:59 p.m. ET tomorrow (Wed Jan 31)" in warning_dm and "removed from the challenge" in warning_dm
+    assert any("You were removed from **February Challenge**" in c for c, _ in mine)
+    assert not any(u in ready and ("Goals are due" in c or c.startswith("⚠️")) for u, c, _ in dms)  # no goal nags
 
-    # The overview posted once, on Jan 31 (the day before the start)
+    warnings = [(c, kw) for c, kw in guild.ann.sent if c and c.startswith("⚠️ **Goal deadline warning**")]
+    assert len(warnings) == 1 and "<@1399>" in warnings[0][0]
+    assert warnings[0][1]["allowed_mentions"].users is True  # this one does ping
+
     overviews = [kw["embeds"] for _, kw in guild.ann.sent
                  if kw.get("embeds") and kw["embeds"][0].title.endswith("what to expect")]
     assert len(overviews) == 1
-    who = overviews[0][4].description
-    assert "Still need goals:" in who and "<@1301>" in who.split("Still need goals:")[1]
-    assert db.get_challenge(ch.id).status == "active"
+    assert "9 players with goals so far" in overviews[0][0].description
+    assert "headed for **team mode**" in overviews[0][0].description
+    assert "Anyone without 3 goals by then is removed" in overviews[0][0].description
+    assert [e.title for e in overviews[0]][3] == "📸 Proof and 💬 feedback"
+
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and ch.mode == "teams"
+    assert len(db.players(ch.id)) == 9 and not db.is_player(ch.id, 1399)
+    assert all(g.approved for uid in ready for g in db.goals(ch.id, uid))
+    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
+    assert lock.title == "Sign-ups closed: 9 players, teams mode" and "Removed (no goals by the deadline): <@1399>" in lock.description
+
+    kickoff = next(kw["embeds"] for _, kw in guild.ann.sent
+                   if kw.get("embeds") and kw["embeds"][0].title.endswith("is officially ON!"))
+    names = [f.name for f in kickoff[0].fields]
+    assert names[:2] == list(main.config.TEAM_NAMES) and "✅ Your day one" in names
+    assert "It's **team mode**" in kickoff[0].description
+    assert [e.title for e in kickoff[1:]] == ["📸 Proof and 💬 feedback", "⌨️ Commands to know"]
+    # the kickoff goes out before day one's mini mission
+    assert guild.missions.sent and guild.missions.sent[0][1]["embed"].title.startswith("⚡")
+
+
+def test_feedback_form_reaches_owner(monkeypatch):
+    sent = []
+
+    class Owner:
+        async def send(self, text):
+            sent.append(text)
+    monkeypatch.setattr(main.config, "OWNER_ID", 4242)
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: Owner() if uid == 4242 else None)
+    form = main.FeedbackForm()
+    assert len(form.to_dict()["components"]) == 2
+    run = asyncio.new_event_loop().run_until_complete
+    for choice, expect in (("named", "Jo (<@55>)"), ("anon", "Anonymous")):
+        form.note = SimpleNamespace(value="The roundup is great but I can't find #proof on mobile")
+        form.anon = SimpleNamespace(values=[choice])
+        i = fake_inter(SimpleNamespace(id=1, name="Moms"), 55)
+        i.user.display_name = "Jo"
+        run(form.on_submit(i))
+        assert sent[-1].startswith(f"💬 **Feedback** from {expect} in **Moms**")
+        assert "Thank you" in i.response.sent[0][0]
