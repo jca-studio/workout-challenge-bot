@@ -171,7 +171,7 @@ def should_lock(challenge: Challenge, now: datetime) -> bool:
     closes = signup_closes(challenge)
     if closes and now >= closes:
         return True
-    return now.date() >= challenge.start and now.hour >= config.MISSION_POST_HOUR
+    return now.date() >= challenge.start
 
 
 def default_deadline(start: date, today: date) -> date:

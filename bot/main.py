@@ -66,6 +66,19 @@ def parse_day(text: str | None, today: date) -> date | None:
         return None
 
 
+def mentions(user_ids, limit: int = 1024, sep: str = " ") -> str:
+    """@mentions joined up to `limit` characters, ending in "+N more" instead of cutting a mention in half."""
+    ids = list(user_ids)
+    out = ""
+    for i, uid in enumerate(ids):
+        piece = (sep if out else "") + f"<@{uid}>"
+        more = f" +{len(ids) - i} more"
+        if len(out) + len(piece) + (len(more) if i < len(ids) - 1 else 0) > limit:
+            return out + more
+        out += piece
+    return out
+
+
 def pretty(d: date) -> str:
     return d.strftime("%a %b %-d")
 
@@ -246,11 +259,11 @@ def signup_reminder_text(guild: discord.Guild, ch: Challenge, today: date) -> st
     lines = [when,
              f"👉 Tap **I'm in** on the sign-up post{f': {link}' if link else ''}",
              f"👯‍♀️ **{len(players)} signed up so far**"
-             + (": " + " ".join(f"<@{p['user_id']}>" for p in players) if players else ". Be the first! 👑")]
+             + (": " + mentions((p["user_id"] for p in players), 900) if players else ". Be the first! 👑")]
     missing = [p["user_id"] for p in players if len(db.goals(ch.id, p["user_id"])) < 3]
     if missing:
         lines.append(f"📝 Still need to set goals by {pretty(last_day)} (tap **I'm in** again, then **Add my goals**): "
-                     + " ".join(f"<@{u}>" for u in missing))
+                     + mentions(missing, 600))
     lines.append(f"The challenge starts {pretty(ch.start)}. 💪🏾")
     return "\n".join(lines)
 
@@ -317,7 +330,7 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
         f"{crown}. Ties share the win. Bragging rights included. 👑"))
     players = db.players(ch.id)
     e.add_field(name=f"👯‍♀️ Signed up ({len(players)})", inline=False,
-                value=(" ".join(f"<@{p['user_id']}>" for p in players) or "Nobody yet. Be the first!")[:1024])
+                value=mentions(p["user_id"] for p in players) or "Nobody yet. Be the first!")
     e.set_footer(text="Commands: /howtoplay · /goals set · /checkin · /mystats · /leaderboard")
     return e
 
@@ -355,6 +368,18 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
     """Close sign-ups: remove players without 3 goals, approve the rest, pick the mode and make teams.
     Runs from /challenge lock, or by itself at the deadline."""
     lines = []
+    gone = []
+    for p in db.players(ch.id):
+        try:
+            guild.get_member(p["user_id"]) or await guild.fetch_member(p["user_id"])
+        except discord.NotFound:
+            gone.append(p["user_id"])
+        except discord.HTTPException:
+            pass
+    if gone and len(db.players(ch.id)) - len(gone) >= 2:
+        for uid in gone:
+            db.leave(ch.id, uid)
+        lines.append("Removed (left the server): " + mentions(gone, 900))
     everyone = [p["user_id"] for p in db.players(ch.id)]
     no_goals = [u for u in everyone if len(db.goals(ch.id, u)) < 3]
     if config.REMOVE_WITHOUT_GOALS and no_goals and len(everyone) - len(no_goals) >= 2:
@@ -362,7 +387,7 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
             db.leave(ch.id, uid)
             await dm(uid, f"😢 You were removed from **{ch.name}** in {guild.name} because your 3 goals weren't in "
                           "by the deadline. We'd love to have you next time! Watch for the next sign-up post. 💕")
-        lines.append("Removed (no goals by the deadline): " + " ".join(f"<@{u}>" for u in no_goals))
+        lines.append("Removed (no goals by the deadline): " + mentions(no_goals, 900))
         no_goals = []
     players = [p["user_id"] for p in db.players(ch.id)]
     if config.AUTO_APPROVE_AT_LOCK:
@@ -407,11 +432,18 @@ async def sync_team_roles(guild: discord.Guild, teams: dict[int, str]):
         roles = {}
         for name in config.TEAM_NAMES:
             roles[name] = discord.utils.get(guild.roles, name=name) or await guild.create_role(name=name, mentionable=True)
-        for uid, team in teams.items():
-            member = guild.get_member(uid) or await guild.fetch_member(uid)
-            await member.add_roles(roles[team], reason="Challenge teams")
     except (discord.Forbidden, discord.HTTPException) as e:
         log.warning("team roles skipped: %s", e)
+        return
+    for uid, team in teams.items():
+        try:
+            member = guild.get_member(uid) or await guild.fetch_member(uid)
+            await member.add_roles(roles[team], reason="Challenge teams")
+        except discord.Forbidden as e:
+            log.warning("team roles skipped: %s", e)
+            return
+        except discord.HTTPException:
+            log.info("couldn't give %s a team role (left the server?)", uid)
 
 
 @challenge_group.command(name="status", description="Where the challenge stands.")
@@ -509,11 +541,11 @@ def kickoff_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     teams = db.teams(ch.id)
     if ch.mode == "teams" and teams:
         for team in config.TEAM_NAMES:
-            members = " ".join(f"<@{u}>" for u, t in teams.items() if t == team)
-            e.add_field(name=team, value=members[:1024] or "—", inline=True)
+            members = mentions(u for u, t in teams.items() if t == team)
+            e.add_field(name=team, value=members or "—", inline=True)
     else:
         e.add_field(name=f"Players ({len(db.players(ch.id))})", inline=False,
-                    value=(" ".join(f"<@{p['user_id']}>" for p in db.players(ch.id)) or "—")[:1024])
+                    value=mentions(p["user_id"] for p in db.players(ch.id)) or "—")
     e.add_field(name="✅ Your day one", inline=False, value=(
         "1. **Do your goals** and check in: post a photo in the proof channel and tap the goal.\n"
         "2. **Do today's mini mission**, posting right after this"
@@ -1537,13 +1569,16 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
         if ann:
             await ann.send(embed=embed)
         ch = db.get_challenge(ch.id)
-    if ch.status == "ready" and today >= ch.start and now.hour >= config.MISSION_POST_HOUR:
+    if ch.status == "ready" and today >= ch.start:
+        # Live from midnight on day one, so a 5 a.m. workout can be logged; the kickoff post waits for the morning.
         db.update_challenge(ch.id, status="active")
         ch = db.get_challenge(ch.id)
-        if ann and not db.job_done(ch.id, "kickoff", "1"):
+    if (ch.status == "active" and ch.start <= today <= ch.start + timedelta(days=1)
+            and now.hour >= config.MISSION_POST_HOUR and not db.job_done(ch.id, "kickoff", "1")):
+        db.mark_job(ch.id, "kickoff", "1")
+        if ann:
             for page in message_pages(kickoff_embeds(guild, ch)):
                 await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
-            db.mark_job(ch.id, "kickoff", "1")
     if ch.status != "active":
         return
     in_range = ch.start <= today <= ch.end
@@ -1571,6 +1606,8 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
 
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")
+        if ann:  # the last week's checkmarks first (it never gets a Saturday roundup), then the crowning
+            await ann.send(embeds=roundup_embeds(ch, ch.end))
         await finish(guild, ch, ann)
 
 
@@ -1629,7 +1666,12 @@ async def send_reminders(guild: discord.Guild, ch: Challenge, today: date):
         open_goals = game.open_goals_today(db, ch, uid, today)
         if not open_goals:
             continue
-        lines = [f"You said you'd **{g.name}** {g.target_days} days this week. Did you today?" for g in open_goals]
+        week = week_for(today, challenge_weeks(ch.start, ch.end))
+        lines = []
+        for g in open_goals:
+            target = scaled_target(g.target_days, week.days)
+            left = target - len(db.checkin_days(g.id, week.start, week.end))
+            lines.append(f"**{g.name}**: {left} of {target} still to go this week. Did you today?")
         buttons = [discord.ui.Button(label=g.name[:70], emoji="✅", style=discord.ButtonStyle.success,
                                      custom_id=f"mb:yes:{g.id}:{today.isoformat()}") for g in open_goals]
         buttons.append(discord.ui.Button(label="Not today", style=discord.ButtonStyle.secondary,
@@ -1693,7 +1735,10 @@ async def give_role(guild: discord.Guild, name: str, user_ids: list[int], ann: d
         for m in list(role.members):
             await m.remove_roles(role, reason="New challenge winners")
         for uid in user_ids:
-            member = guild.get_member(uid) or await guild.fetch_member(uid)
+            try:
+                member = guild.get_member(uid) or await guild.fetch_member(uid)
+            except discord.NotFound:
+                continue  # she left the server
             await member.add_roles(role, reason="Challenge winner")
     except (discord.Forbidden, discord.HTTPException):
         await ann.send(f"(I couldn't hand out the **{name}** role. Give me Manage Roles and put my role above it.)")
@@ -1738,8 +1783,9 @@ async def move_crowns(guild: discord.Guild, winners: list[int], top: list[int], 
         except (discord.Forbidden, discord.HTTPException):
             skipped.append(f"<@{uid}>")
     if skipped:
-        await ann.send("I couldn't add the crown for: " + ", ".join(skipped)
-                       + ". (I need Manage Nicknames, and my role has to be above theirs.)")
+        perms = any("yourself" not in x for x in skipped)
+        await ann.send("I couldn't add the crown for: " + ", ".join(skipped) + "."
+                       + (" (I need Manage Nicknames, and my role has to be above theirs.)" if perms else ""))
 
 
 @scheduler.before_loop

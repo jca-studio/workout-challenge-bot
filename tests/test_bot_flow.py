@@ -137,10 +137,10 @@ def test_month_of_jobs(monkeypatch):
     # 31 missions, all in the mini mission channel, none in the announce channel
     assert len(missions) == 31 and all(e.title.startswith("⚡") for e in missions)
     assert not any(e.title.startswith("⚡") for e in embeds)
-    # a roundup every morning from Dec 2 to Dec 31 (Jan 1 gets the final crowning instead)
-    assert len(roundups) == 30
+    # a roundup every morning from Dec 2 to Dec 31, plus the last week's final on Jan 1 before the crowning
+    assert len(roundups) == 31
     finals = [r[0].title for r in roundups if "final" in r[0].title]
-    assert [t.split(" (")[0] for t in finals] == [f"🏆 Week {n} final" for n in (1, 2, 3, 4)]
+    assert [t.split(" (")[0] for t in finals] == [f"🏆 Week {n} final" for n in (1, 2, 3, 4, 5)]
     first = roundups[0]
     assert first[0].title == "☀️ Daily roundup: Tue Dec 1" and first[1].title == "Week 1 so far"
     # Dec 1 is a 4-day week: "every day" shrinks to 4 and "3 days" to 2
@@ -865,3 +865,81 @@ def test_leaving_mid_challenge_drops_from_scoring(monkeypatch):
     assert 1702 not in s.player_weeks
     # Before: (4 + 0) / 2 = 2. After: 1701 alone, perfect (3 + 1) and her team is now all-perfect (+1) = 5
     assert before == pytest.approx(2.0) and s.team_total("A") == pytest.approx(5.0)
+
+
+def test_day_one_is_live_at_midnight_and_kickoff_waits_for_morning(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 47
+    db.set_settings(47, 10, 11, None)
+    ch = db.create_challenge(47, "Jan", date(2030, 1, 6), date(2030, 1, 31), 99, signup_deadline=date(2030, 1, 5))
+    for uid in (1801, 1802):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, ch, at(date(2030, 1, 6), 0)))
+    assert db.get_challenge(ch.id).status == "active"  # a 5 a.m. workout can be logged
+    assert not any(kw.get("embeds") for _, kw in guild.ann.sent)  # but no kickoff yet
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2030, 1, 6), 5))
+    msg = FakeMessage(guild, guild.proof, 1801)
+    run(main.on_message(msg))
+    assert msg.replies and msg.replies[0][1]["view"].children[0].label == "Run"
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2030, 1, 6), 7)))
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2030, 1, 6), 9)))
+    kickoffs = [kw for _, kw in guild.ann.sent if kw.get("embeds") and kw["embeds"][0].title.endswith("officially ON!")]
+    assert len(kickoffs) == 1
+
+
+def test_one_player_leaving_the_server_doesnt_block_team_roles(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 48
+    gone = 1909
+
+    async def fetch(uid):
+        if uid == gone:
+            raise discord.NotFound(SimpleNamespace(status=404, reason="Unknown Member"), "Unknown Member")
+        return guild.get_member(uid)
+    guild.fetch_member = fetch
+    real_get = guild.get_member
+    guild.get_member = lambda uid: None if uid == gone else real_get(uid)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    db.set_settings(48, 10, 11, None)
+    ch = db.create_challenge(48, "Feb", date(2030, 2, 1), date(2030, 2, 28), 99)
+    for uid in range(1900, 1910):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    embed = asyncio.new_event_loop().run_until_complete(main.lock_signups(guild, ch))
+    assert "Removed (left the server): <@1909>" in embed.description
+    assert not db.is_player(ch.id, gone)
+    with_roles = {m.id for r in guild.roles if r.name in config.TEAM_NAMES for m in r.members}
+    assert with_roles == set(range(1900, 1909))
+
+
+def test_reminder_uses_this_weeks_target(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 49
+    db.set_settings(49, 10, 11, None)
+    dms = []
+
+    class U:
+        async def send(self, content=None, **kw):
+            dms.append(content)
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: U())
+    ch = db.create_challenge(49, "Short", date(2030, 3, 29), date(2030, 3, 31), 99)  # Fri, then Sat-Sun
+    db.join(ch.id, 2001)
+    db.set_goals(ch.id, 2001, [("Run", 3), ("Read", 7), ("Sleep", 7)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    asyncio.new_event_loop().run_until_complete(main.send_reminders(guild, db.get_challenge(ch.id), date(2030, 3, 30)))
+    # Sat-Sun is a 2-day week: "every day" is 2, "3 days" is 1
+    assert "**Run**: 1 of 1 still to go" in dms[0] and "**Read**: 2 of 2 still to go" in dms[0]
+
+
+def test_mention_lists_never_cut_a_mention_in_half():
+    ids = [300000000000000000 + k for k in range(80)]
+    text = main.mentions(ids, 1024)
+    assert len(text) <= 1024 and text.endswith(" more") and "<@" in text
+    assert all(part.startswith("<@") and part.endswith(">") for part in text.rsplit(" +", 1)[0].split(" "))
+    assert main.mentions([1, 2]) == "<@1> <@2>"
