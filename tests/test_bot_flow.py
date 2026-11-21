@@ -616,13 +616,15 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
 
     embeds = main.overview_embeds(guild, ch)
     titles = [e.title for e in embeds]
-    assert titles == ["📣 December Challenge: what to expect", "💋 How points work",
-                      "⏰ Reminders and the daily schedule", "📸 Proof and 💬 feedback", "⌨️ Commands to know",
+    assert titles == ["📣 December Challenge: what to expect", "✅ How to check in and track your progress",
+                      "💋 How points work", "⏰ Reminders and the daily schedule", "⌨️ Commands to know",
                       "👯‍♀️ Who's playing (3)"]
     who = embeds[-1].description
     assert "**<@1201>**: Yoga, 3 days · Affirmations, every day · Read, 5 days" in who
     assert "**Still need goals:** <@1203>" in who
-    assert "<#12>" in embeds[2].description and "8 p.m." in embeds[2].description
+    assert "<#12>" in embeds[3].description and "8 p.m." in embeds[3].description
+    howto = " ".join(f.value for f in embeds[1].fields)
+    assert "Tap the goal it's for" in howto and "/checkin" in howto and "/mystats" in howto
     assert all(sum(len(e) for e in page) <= 6000 for page in main.message_pages(embeds))
 
     def inter():
@@ -706,7 +708,7 @@ def test_lead_up_warning_overview_removal_and_kickoff(monkeypatch):
     assert "9 players with goals so far" in overviews[0][0].description
     assert "headed for **team mode**" in overviews[0][0].description
     assert "Anyone without 3 goals by then is removed" in overviews[0][0].description
-    assert [e.title for e in overviews[0]][3] == "📸 Proof and 💬 feedback"
+    assert [e.title for e in overviews[0]][1] == "✅ How to check in and track your progress"
 
     ch = db.get_challenge(ch.id)
     assert ch.status == "active" and ch.mode == "teams"
@@ -720,7 +722,7 @@ def test_lead_up_warning_overview_removal_and_kickoff(monkeypatch):
     names = [f.name for f in kickoff[0].fields]
     assert names[:2] == list(main.config.TEAM_NAMES) and "✅ Your day one" in names
     assert "It's **team mode**" in kickoff[0].description
-    assert [e.title for e in kickoff[1:]] == ["📸 Proof and 💬 feedback", "⌨️ Commands to know"]
+    assert [e.title for e in kickoff[1:]] == ["✅ How to check in and track your progress", "⌨️ Commands to know"]
     # the kickoff goes out before day one's mini mission
     assert guild.missions.sent and guild.missions.sent[0][1]["embed"].title.startswith("⚡")
 

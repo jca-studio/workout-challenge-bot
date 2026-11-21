@@ -508,25 +508,39 @@ def commands_embed() -> discord.Embed:
 
 
 def proof_feedback_embed(guild: discord.Guild) -> discord.Embed:
+    """How to check in, how to see your progress, and how to send feedback."""
     proof = channel(guild, "proof_channel_id")
     missions = mission_channel(guild)
     where = proof.mention if proof else "the proof channel"
     photo = {"required": "**A photo is required** for every check-in.",
              "per_goal": "Some goals need a photo; the commissioner will tell you which.",
-             }.get(config.PHOTO_MODE, "Photos are **encouraged, not required**. No photo? Use `/checkin` or the "
-                                      "buttons in the 8 p.m. reminder.")
-    e = discord.Embed(title="📸 Proof and 💬 feedback", color=PINK)
-    e.add_field(name="How to submit proof", inline=False, value=(
-        f"Post a photo in {where} and tap the goal it's for. That counts as your check-in. "
-        f"Or use `/checkin` and attach a photo. {photo}\n"
-        f"Mini mission proof: post it in {missions.mention if missions else where} and tap **Today's mini mission**, "
-        "or use `/mission done`."))
-    e.add_field(name="When", inline=False, value=(
-        "Anytime that day. Forgot? You can log any day of the current week until **Friday at midnight** "
+             }.get(config.PHOTO_MODE, "Photos are **encouraged, not required**.")
+    e = discord.Embed(title="✅ How to check in and track your progress", color=PINK, description=(
+        "A check-in is how you tell the bot you did a goal that day. Each one counts toward that goal's "
+        f"weekly target. {photo}"))
+    e.add_field(name="📸 Post a photo (easiest)", inline=False, value=(
+        f"Post a photo in {where}. I'll reply with a button for each of your goals. **Tap the goal it's for** "
+        "and that photo is your check-in for that goal today. One photo can cover more than one goal: tap each "
+        "one it counts for."))
+    e.add_field(name="⌨️ Use /checkin", inline=False, value=(
+        "`/checkin` → pick the goal → pick the day (today or an earlier day this week). You can attach a photo, "
+        "or skip it. Good for catching up on a day you forgot."))
+    e.add_field(name=f"💌 Tap the {hour_label(config.REMINDER_HOUR)} reminder", inline=False, value=(
+        "If you haven't checked in by then, I'll DM you a button for each goal you still need. Tap the ones "
+        "you did."))
+    e.add_field(name="⚡ Mini missions", inline=False, value=(
+        f"Post a photo in {missions.mention if missions else where} and tap **Today's mini mission**, "
+        "or use `/mission done`. You have 24 hours from when it posts."))
+    e.add_field(name="⏳ Deadlines", inline=False, value=(
+        "Check in anytime that day. Forgot? You can log any day of the current week until **Friday at midnight** "
         f"{tz_label()}. After that the week locks; ask the commissioner if something was missed. "
-        f"Night owls: a photo posted before {hour_label(config.LATE_NIGHT_GRACE_HOUR)} can count for the day before. "
-        "Mini missions have 24 hours from when they post."))
-    e.add_field(name="Feedback about the challenge", inline=False, value=(
+        f"Night owls: a photo posted before {hour_label(config.LATE_NIGHT_GRACE_HOUR)} can count for the day before."))
+    e.add_field(name="📊 See your progress", inline=False, value=(
+        "`/mystats` · your week so far, goal by goal, and your total (only you see it)\n"
+        f"**Morning roundup** at {hour_label(config.ROUNDUP_HOUR)} · everyone's ✅ for the week plus the leaderboard\n"
+        "`/leaderboard` · the standings anytime\n"
+        "Every check-in reply also shows your ✅⬜ for that goal this week."))
+    e.add_field(name="💬 Feedback about the challenge", inline=False, value=(
         "Something confusing, a bug, or an idea? Use `/feedback` to send a private note to the organizer. "
         "You can stay anonymous."))
     return e
@@ -626,7 +640,7 @@ def overview_embeds(guild: discord.Guild, ch: Challenge) -> list[discord.Embed]:
     chunks.append(current)
     players.description = chunks[0]
     extra = [discord.Embed(description=c, color=PINK) for c in chunks[1:]]
-    return [intro, points, reminders, proof_feedback, commands, players, *extra]
+    return [intro, proof_feedback, points, reminders, commands, players, *extra]
 
 
 @challenge_group.command(name="overview", description="Commissioner: send players a what-to-expect overview.")
