@@ -1008,71 +1008,109 @@ def test_day_before_vote_and_commissioner_call(monkeypatch):
     post = next(m for m in guild.ann.posts.values() if m.kw.get("embed") and "teams or individual" in m.kw["embed"].title)
     e = post.kw["embed"]
     assert "we have **5 signed up**" in e.description and "split at random" in e.description
+    assert "more than half" in e.description
     assert [b.label for b in post.kw["view"].children] == ["Teams", "Individual"]
     assert "<@99> makes the final call tonight" in e.fields[-1].value
-    # the commissioner gets a DM with the tally and pick buttons
     prompt = [(c, v) for u, c, v in dms if u == 99]
     assert len(prompt) == 1 and "0 teams, 0 individual" in prompt[0][0]
     assert [b.label for b in prompt[0][1].children] == ["Make it teams", "Make it individual"]
 
-    # players vote (and can change their vote); outsiders can't
-    for uid, choice in zip(players, ["individual", "individual", "teams", "individual", "teams"]):
+    # 2 of 5 isn't a majority yet; outsiders can't vote
+    for uid, choice in zip(players, ["individual", "teams"]):
         run(main.handle_vote(fake_inter(guild, uid), ch.id, choice))
-    flip = fake_inter(guild, 2100)
-    run(main.handle_vote(flip, ch.id, "teams"))
-    assert "you voted **Teams**" in flip.response.sent[0][0]
     outsider = fake_inter(guild, 5555)
     run(main.handle_vote(outsider, ch.id, "teams"))
     assert "Only players who signed up" in outsider.response.sent[0][0]
-    assert game.vote_tally(db, db.get_challenge(ch.id)) == (3, 2)
-    assert "Teams: **3**" in post.kw["embed"].fields[0].value
+    assert db.get_challenge(ch.id).mode is None and "Teams: **1**" in post.kw["embed"].fields[0].value
 
-    # a player can't make the call, the commissioner can (from her DM, with no guild)
+    # a player can't make the call; the commissioner can, from her DM, and it's settled right away
     nope = fake_inter(guild, 2101)
     monkeypatch.setattr(main, "is_commish", lambda inter: False)
     run(main.handle_pick(nope, ch.id, "individual"))
     assert "Only the commissioner" in nope.response.sent[0][0]
+    monkeypatch.setattr(game, "now_local", lambda: at(eve, 14))
     from_dm = SimpleNamespace(user=SimpleNamespace(id=99), guild=None, guild_id=None, response=FakeResponse())
     run(main.handle_pick(from_dm, ch.id, "individual"))
     assert from_dm.response.sent[0][0].startswith("Done: **Individual**")
-    assert any(c and "The commissioner's call: Individual!" in c for c, _ in guild.ann.sent)
-    assert "picked **Individual**" in post.kw["embed"].fields[-1].value
-
-    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))  # already picked: no 9 p.m. nudge
-    assert len([1 for u, _, _ in dms if u == 99]) == 1
-
-    # midnight: the commissioner's call beats the 3-2 vote
-    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
     ch = db.get_challenge(ch.id)
-    assert ch.status == "active" and ch.mode == "individual"
-    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
-    assert lock.title == "Sign-ups closed: 5 players, individual mode"
-    assert "by the commissioner's call" in lock.description
+    assert ch.mode == "individual" and not db.teams(ch.id)
+    roundup = guild.ann.sent[-1][1]["embed"]
+    assert roundup.title == "🗳️ The votes are in: it's individual!"
+    assert "starts in 10 hours" in roundup.description  # 2:05 p.m. -> midnight, rounded up
+    assert "by the commissioner's call" in roundup.description
     assert post.kw["view"] is None and "Voting is closed" in post.kw["embed"].fields[0].value
     late = fake_inter(guild, 2102)
     run(main.handle_vote(late, ch.id, "teams"))
     assert "Voting is closed" in late.response.sent[0][0]
 
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))  # already decided: no 9 p.m. nudge
+    assert len([1 for u, _, _ in dms if u == 99]) == 1
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and ch.mode == "individual"
+    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
+    assert lock.title == "Sign-ups closed: 5 players, individual mode"
 
-def test_vote_decides_when_commissioner_doesnt(monkeypatch):
+
+def test_majority_vote_picks_teams_on_the_spot(monkeypatch):
     start = date(2031, 5, 1)
     players = list(range(2200, 2205))
     db, guild, dms, ch = vote_setup(monkeypatch, 72, start, players)
     run = asyncio.new_event_loop().run_until_complete
     eve = start - timedelta(days=1)
     run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 12)))
-    for uid in players[:3]:
+    monkeypatch.setattr(game, "now_local", lambda: at(eve, 15))
+    for uid in players[:2]:
         run(main.handle_vote(fake_inter(guild, uid), ch.id, "teams"))
-    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))  # 9 p.m. nudge with the tally
+    assert db.get_challenge(ch.id).mode is None
+    third = fake_inter(guild, players[2])
+    run(main.handle_vote(third, ch.id, "teams"))  # 3 of 5: majority
+    assert "that's a majority" in third.response.sent[0][0]
+    ch = db.get_challenge(ch.id)
+    teams = db.teams(ch.id)
+    assert ch.mode == "teams" and set(teams) == set(players)
+    assert sorted(list(teams.values()).count(t) for t in config.TEAM_NAMES) == [2, 3]
+    roundup = guild.ann.sent[-1][1]["embed"]
+    assert roundup.title == "🗳️ The votes are in: it's teams!"
+    assert "starts in 9 hours" in roundup.description and "picked at random" in roundup.description
+    assert "majority vote (3 teams, 0 individual, of 5 players)" in roundup.description
+    for t in config.TEAM_NAMES:
+        assert f"**{t}**" in roundup.description
+    assert all(f"<@{u}>" in roundup.description for u in players)
+
+    # someone joins after teams are picked: she lands on the smaller team
+    small = min(config.TEAM_NAMES, key=lambda t: list(teams.values()).count(t))
+    joiner = fake_inter(guild, 2299)
+    run(main.handle_signup(joiner, ch.id, True))
+    assert db.teams(ch.id)[2299] == small and f"you're on **{small}**" in joiner.response.sent[0][0]
+
+    # no nudge, and midnight keeps the same teams (2299 has no goals, so she's removed)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))
+    assert len([1 for u, _, _ in dms if u == 99]) == 1
+    before = {u: t for u, t in db.teams(ch.id).items() if u != 2299}
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and db.teams(ch.id) == before
+    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
+    assert lock.title == "Sign-ups closed: 5 players, teams mode"
+
+
+def test_no_majority_by_midnight_goes_with_more_votes(monkeypatch):
+    start = date(2031, 6, 1)
+    players = list(range(2400, 2406))
+    db, guild, dms, ch = vote_setup(monkeypatch, 74, start, players)
+    run = asyncio.new_event_loop().run_until_complete
+    eve = start - timedelta(days=1)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 12)))
+    for uid, choice in zip(players, ["teams", "teams", "individual"]):  # 2-1 of 6: no majority
+        run(main.handle_vote(fake_inter(guild, uid), ch.id, choice))
+    assert db.get_challenge(ch.id).mode is None
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))
     nudges = [c for u, c, _ in dms if u == 99]
-    assert len(nudges) == 2 and "3 teams, 0 individual" in nudges[1]
+    assert len(nudges) == 2 and "2 teams, 1 individual" in nudges[1]
     run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
     ch = db.get_challenge(ch.id)
     assert ch.mode == "teams" and len(set(db.teams(ch.id).values())) == 2
-    sizes = sorted(list(db.teams(ch.id).values()).count(t) for t in config.TEAM_NAMES)
-    assert sizes == [2, 3]
-    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
-    assert "by the vote (3 teams, 0 individual)" in lock.description and "picked at random" in lock.description
 
 
 def test_tied_vote_falls_back_to_player_count():

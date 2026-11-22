@@ -58,10 +58,11 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | During sign-ups | Players tap **I'm in**, then **Add my goals**, which opens one form for all 3 goals, each written like "Yoga, 3 days" or "Affirmations, every day" (`/goals set` opens the same form). Check who's missing with `/challenge status` |
 | Last 3 days before the deadline | The bot DMs anyone signed up without 3 goals, once a day, with an **Add my goals** button |
 | The night before the deadline | At 8 p.m. the bot posts a warning that pings anyone without 3 goals (and DMs them): goals by the deadline, or they're removed |
-| The day before the start | At noon the bot posts the vote: how many are signed up, who they are, **Teams** and **Individual** buttons with a live tally, and a note that teams are picked at random. Only signed-up players can vote, and they can change their vote until midnight. The commissioner gets a DM with the tally and **Make it teams** / **Make it individual** buttons (or use `/challenge mode`), and a reminder at 9 p.m. if she hasn't picked |
+| The day before the start | At noon the bot posts the vote: how many are signed up, who they are, **Teams** and **Individual** buttons with a live tally, and a note that teams are picked at random. Only signed-up players can vote. The commissioner gets a DM with the tally and **Make it teams** / **Make it individual** buttons (or use `/challenge mode`), and a reminder at 9 p.m. if it's still open |
+| As soon as it's decided | When more than half of the signed-up players vote the same way, or the commissioner makes the call, voting closes and the bot posts the result with a countdown in hours to the start. If it's teams, it picks 2 random teams on the spot and lists them. Anyone who joins after that goes on the smaller team |
 | The night before the start | At 7 p.m. the bot posts the overview by itself, including where the vote stands. To send it earlier, or by DM, run `/challenge overview` |
 | At the deadline | Players without 3 goals are removed and DM'd and everyone else's goals are approved |
-| Midnight before day one | Team or solo is settled and, if it's teams, players are split at random |
+| Midnight before day one | If nothing was decided, the side with more votes wins (a tie or no votes goes by the player count) and teams are picked |
 | Morning of day one | At 7 a.m. the bot posts the kickoff welcome (teams, what to do today, proof, feedback, commands), then the first mini mission |
 | Anytime | `/challenge overview` posts a what-to-expect message in the announce channel (or `send_to: DM every player`): how it works, points, reminders and the daily schedule, commands, and everyone's goals |
 | Before the deadline (optional) | `/goals all` shows everyone's goals. Goals are approved automatically at the deadline, so you only need this to review them |
@@ -72,7 +73,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | Someone drops out | Players can run `/challenge leave`. The commissioner can run `/commish remove` (type REMOVE to confirm). Either way her points stop counting and team averages are recalculated |
 | After the last day | At 9 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
 
-**Team or individual:** the commissioner's call wins. If she doesn't make one, the vote decides. If the vote is tied or nobody votes, 8 or more players makes teams and fewer is individual. To decide and make teams right away, use `/challenge lock mode:teams` or `mode:individual`.
+**Team or individual:** a majority vote or the commissioner's call, whichever comes first, settles it right away. If neither happens by midnight, the side with more votes wins. If the vote is tied or nobody votes, 8 or more players makes teams and fewer is individual. To decide and make teams right away, use `/challenge lock mode:teams` or `mode:individual`.
 
 ### What the bot does on its own each day (Eastern time by default)
 
@@ -162,7 +163,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 83 tests, including a simulated month
+python -m pytest                 # 84 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```
