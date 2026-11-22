@@ -246,7 +246,7 @@ def test_signup_post_has_rules_players_and_deadline():
                          "🍑 Weekly schedule", "🏆 Prizes"]
     assert names[-1] == "👯‍♀️ Signed up (3)" and "<@202>" in e.fields[-1].value
     assert "Sign up by Fri Feb 26 at 11:59 p.m. ET" in e.description
-    assert "8 p.m. ET" in e.fields[2].value and "<#11>" in e.fields[2].value
+    assert f"{main.hour_label(config.REMINDER_HOUR)} ET" in e.fields[2].value and "<#11>" in e.fields[2].value
     assert len(e) < 6000 and all(len(f.value) <= 1024 for f in e.fields)
     closed = main.signup_embed(guild, ch, closed=True)
     assert "Sign-ups are closed" in closed.description
@@ -626,7 +626,7 @@ def test_challenge_overview_channel_and_dm(monkeypatch):
     who = embeds[-1].description
     assert "**<@1201>**: Yoga, 3 days · Affirmations, every day · Read, 5 days" in who
     assert "**Still need goals:** <@1203>" in who
-    assert "<#12>" in embeds[3].description and "8 p.m." in embeds[3].description
+    assert "<#12>" in embeds[3].description and main.hour_label(config.REMINDER_HOUR) in embeds[3].description
     howto = " ".join(f.value for f in embeds[1].fields)
     assert "Tap the goal it's for" in howto and "/checkin" in howto and "/mystats" in howto
     assert all(sum(len(e) for e in page) <= 6000 for page in main.message_pages(embeds))

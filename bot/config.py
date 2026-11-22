@@ -13,10 +13,10 @@ DATABASE_PATH = _env("DATABASE_PATH", "data/challenge.db")
 # All times (reminders, daily mission, weekly lock, standings) use this time zone.
 TZ = ZoneInfo(_env("TIMEZONE", "America/New_York"))
 
-REMINDER_HOUR = int(_env("REMINDER_HOUR", "20"))          # 8 p.m. reminder if you haven't checked in
-MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "7"))    # daily mini mission
-STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "9"))          # final standings after the last day
-ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "8"))              # daily roundup of yesterday
+REMINDER_HOUR = int(_env("REMINDER_HOUR", "18"))          # 6 p.m. reminder if you haven't checked in
+MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "4"))    # kickoff + daily mini mission
+STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "5"))          # final standings after the last day
+ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "5"))              # daily roundup of yesterday
 SIGNUP_REMINDER_HOUR = int(_env("SIGNUP_REMINDER_HOUR", "10"))  # daily nudge while sign-ups are open
 OVERVIEW_HOUR = int(_env("OVERVIEW_HOUR", "19"))           # what-to-expect post, the night before the start
 GOAL_NUDGE_DAYS = int(_env("GOAL_NUDGE_DAYS", "3"))        # DM players without goals this many days before the deadline
