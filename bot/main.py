@@ -297,9 +297,9 @@ def signup_embed(guild: discord.Guild, ch: Challenge, closed: bool = False) -> d
         "*I will [goal] on [1–7] days per week*, written like \"Yoga, 3 days\".\n"
         "\"Don't\" goals get flipped: \"only drink 1 day\" becomes **alcohol-free 6 days**. "
         "One check-in per goal per day. The commissioner approves goals before the start."))
-    e.add_field(name="💪🏾 Teams", inline=False, value=(
-        f"**{config.TEAM_MODE_MIN_PLAYERS}+ players:** split randomly into **{' vs '.join(config.TEAM_NAMES)}**.\n"
-        f"**Fewer:** everyone plays for herself."
+    e.add_field(name="💪🏾 Teams or solo", inline=False, value=(
+        "The day before we start, everyone who's signed up **votes: teams or individual**, and the commissioner "
+        f"makes the final call. If it's teams, you're **split at random** into **{' vs '.join(config.TEAM_NAMES)}**."
         + (" Team scores are compared by average per player." if config.TEAM_SCORE_AVERAGE else "")))
     e.add_field(name="📸 Checking in", inline=False, value=(
         f"Post a photo in {proof_name} and tap which goal it's for, or use `/checkin`. "
@@ -364,7 +364,8 @@ async def challenge_lock(inter: discord.Interaction, mode: str = "auto"):
     await inter.followup.send(embed=await lock_signups(inter.guild, ch, mode))
 
 
-async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") -> discord.Embed:
+async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto",
+                       today: date | None = None) -> discord.Embed:
     """Close sign-ups: remove players without 3 goals, approve the rest, pick the mode and make teams.
     Runs from /challenge lock, or by itself at the deadline."""
     lines = []
@@ -392,18 +393,17 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
     players = [p["user_id"] for p in db.players(ch.id)]
     if config.AUTO_APPROVE_AT_LOCK:
         db.approve_goals(ch.id)
-    chosen = game.choose_mode(len(players), mode)
-    db.update_challenge(ch.id, mode=chosen, status="ready")
-    if chosen == "teams":
-        teams = game.assign_teams(players)
-        for uid, team in teams.items():
-            db.set_team(ch.id, uid, team)
-        await sync_team_roles(guild, teams)
-        for team in config.TEAM_NAMES:
-            members = " ".join(f"<@{u}>" for u, t in teams.items() if t == team)
-            lines.append(f"**{team}**\n{members}")
+    if mode in ("teams", "individual"):
+        db.update_challenge(ch.id, mode_pick=mode)
+    db.update_challenge(ch.id, status="ready")
+    ch = db.get_challenge(ch.id)
+    chosen = None
+    if mode in ("teams", "individual") or (today or game.now_local().date()) >= ch.start:
+        chosen, mode_lines = await finalize_mode(guild, ch)
+        lines += mode_lines
     else:
-        lines.append("Everyone plays for herself. Top scorer takes the crown. 👑")
+        lines.append(f"🗳️ Teams or individual gets decided the day before we start: watch for the vote on "
+                     f"{pretty(game.mode_vote_day(ch))}.")
     if no_goals:
         lines.append("Still need goals (`/goals set`): " + " ".join(f"<@{u}>" for u in no_goals))
     unapproved = [u for u in players if any(not g.approved for g in db.goals(ch.id, u))]
@@ -411,8 +411,164 @@ async def lock_signups(guild: discord.Guild, ch: Challenge, mode: str = "auto") 
         lines.append("Commissioner, these goals need approval (`/goals all`): " + " ".join(f"<@{u}>" for u in unapproved))
     lines.append(f"The challenge starts **{pretty(ch.start)}**.")
     await refresh_signup(guild, ch, closed=True)
-    return discord.Embed(title=f"Sign-ups closed: {len(players)} players, {chosen} mode",
-                         description="\n\n".join(lines), color=PINK)
+    title = f"Sign-ups closed: {len(players)} players" + (f", {chosen} mode" if chosen else "")
+    return discord.Embed(title=title, description="\n\n".join(lines), color=PINK)
+
+
+async def finalize_mode(guild: discord.Guild, ch: Challenge) -> tuple[str, list[str]]:
+    """Settle team or solo (commissioner's call, else the vote, else the player count) and make random teams."""
+    players = [p["user_id"] for p in db.players(ch.id)]
+    chosen, why = game.final_mode(db, ch, len(players))
+    db.update_challenge(ch.id, mode=chosen)
+    lines = [f"It's **{'team' if chosen == 'teams' else 'individual'} mode**, by {why}."]
+    if chosen == "teams":
+        teams = game.assign_teams(players)
+        for uid, team in teams.items():
+            db.set_team(ch.id, uid, team)
+        await sync_team_roles(guild, teams)
+        lines[0] += " Teams were picked at random. 🎲"
+        for team in config.TEAM_NAMES:
+            members = " ".join(f"<@{u}>" for u, t in teams.items() if t == team)
+            lines.append(f"**{team}**\n{members}")
+    else:
+        lines.append("Everyone plays for herself. Top scorer takes the crown. 👑")
+    await refresh_vote(guild, db.get_challenge(ch.id))
+    return chosen, lines
+
+
+# ---------- teams or solo: the day-before vote ----------
+
+def mode_name(mode: str) -> str:
+    return "Teams" if mode == "teams" else "Individual"
+
+
+def vote_embed(ch: Challenge) -> discord.Embed:
+    """The day-before post: who's signed up, the live vote, and who makes the call."""
+    players = db.players(ch.id)
+    t, i = game.vote_tally(db, ch)
+    commish = f"<@{ch.created_by}>" if ch.created_by else "The commissioner"
+    e = discord.Embed(title=f"🗳️ {ch.name}: teams or individual?", color=PINK, description=(
+        f"Okay ladies, we start **tomorrow ({pretty(ch.start)})** and we have **{len(players)} signed up**! 🎉\n\n"
+        "Vote below: **Teams** or **Individual**. You can change your vote until midnight.\n"
+        f"🎲 If it's teams, everyone is **split at random** into **{' vs '.join(config.TEAM_NAMES)}**."))
+    if ch.mode:
+        e.add_field(name="✅ Decided", inline=False, value=f"**{mode_name(ch.mode)}**. Voting is closed.")
+    e.add_field(name="📊 The vote so far", inline=False, value=f"💪🏾 Teams: **{t}**\n👑 Individual: **{i}**")
+    e.add_field(name=f"👯‍♀️ Signed up ({len(players)})", inline=False,
+                value=mentions(p["user_id"] for p in players) or "Nobody yet")
+    missing = [p["user_id"] for p in players if len(db.goals(ch.id, p["user_id"])) < 3]
+    if missing and config.REMOVE_WITHOUT_GOALS and ch.status == "signup":
+        e.add_field(name="📝 Still need goals by midnight", inline=False, value=mentions(missing, 1000))
+    if not ch.mode:
+        e.add_field(name="👩‍⚖️ Who decides", inline=False, value=(
+            (f"{commish} picked **{mode_name(ch.mode_pick)}**. "
+             if ch.mode_pick else f"{commish} makes the final call tonight. ")
+            + "If there's no call by midnight, the vote decides."))
+    return e
+
+
+def vote_view(ch: Challenge) -> discord.ui.View:
+    return make_view([
+        discord.ui.Button(label="Teams", emoji="💪🏾", style=discord.ButtonStyle.primary,
+                          custom_id=f"mb:vote:{ch.id}:teams"),
+        discord.ui.Button(label="Individual", emoji="👑", style=discord.ButtonStyle.primary,
+                          custom_id=f"mb:vote:{ch.id}:individual"),
+    ])
+
+
+def pick_view(ch: Challenge) -> discord.ui.View:
+    return make_view([
+        discord.ui.Button(label="Make it teams", emoji="💪🏾", style=discord.ButtonStyle.success,
+                          custom_id=f"mb:pick:{ch.id}:teams"),
+        discord.ui.Button(label="Make it individual", emoji="👑", style=discord.ButtonStyle.success,
+                          custom_id=f"mb:pick:{ch.id}:individual"),
+    ])
+
+
+def pick_prompt(ch: Challenge) -> str:
+    t, i = game.vote_tally(db, ch)
+    n = len(db.players(ch.id))
+    return (f"👩‍⚖️ **You're the commissioner for {ch.name}.** {n} signed up, and the vote is **{t} teams, "
+            f"{i} individual**. Make the final call by midnight with a button below, or `/challenge mode` in the "
+            "server. If you don't, the vote decides (a tie or no votes goes by the player count).")
+
+
+async def post_mode_vote(guild: discord.Guild, ch: Challenge, ann: discord.TextChannel | None):
+    if ann:
+        msg = await ann.send(embed=vote_embed(ch), view=vote_view(ch), allowed_mentions=discord.AllowedMentions.none())
+        db.update_challenge(ch.id, vote_channel_id=ann.id, vote_message_id=msg.id)
+    await nudge_commissioner(guild, ch, ann)
+
+
+async def nudge_commissioner(guild: discord.Guild, ch: Challenge, ann: discord.TextChannel | None):
+    """DM the commissioner the tally with pick buttons; fall back to a ping in the channel."""
+    if not ch.created_by:
+        return
+    if not await dm(ch.created_by, pick_prompt(ch), pick_view(ch)) and ann:
+        await ann.send(f"<@{ch.created_by}> " + pick_prompt(ch), view=pick_view(ch))
+
+
+async def refresh_vote(guild: discord.Guild, ch: Challenge):
+    if not ch.vote_message_id:
+        return
+    try:
+        msg = await guild.get_channel(ch.vote_channel_id).fetch_message(ch.vote_message_id)
+        await msg.edit(embed=vote_embed(ch), view=None if ch.mode else vote_view(ch))
+    except Exception:
+        log.warning("couldn't update the vote post", exc_info=True)
+
+
+async def handle_vote(inter: discord.Interaction, challenge_id: int, choice: str):
+    ch = db.get_challenge(challenge_id)
+    if not ch or ch.mode or ch.status not in ("signup", "ready"):
+        return await deny(inter, "Voting is closed. 💕")
+    if not db.is_player(ch.id, inter.user.id):
+        return await deny(inter, "Only players who signed up can vote. Tap **I'm in** on the sign-up post first!")
+    db.set_vote(ch.id, inter.user.id, choice)
+    await inter.response.send_message(f"Got it: you voted **{mode_name(choice)}**. Tap the other button to change it.",
+                                      ephemeral=True)
+    await refresh_vote(inter.guild, ch)
+
+
+def can_pick(inter: discord.Interaction, ch: Challenge) -> bool:
+    return inter.user.id == ch.created_by or (inter.guild is not None and is_commish(inter))
+
+
+async def set_pick(guild: discord.Guild, ch: Challenge, mode: str, by: int) -> str:
+    db.update_challenge(ch.id, mode_pick=mode)
+    ch = db.get_challenge(ch.id)
+    await refresh_vote(guild, ch)
+    ann = channel(guild, "announce_channel_id")
+    if ann:
+        await ann.send(f"👩‍⚖️ **The commissioner's call: {mode_name(mode)}!**"
+                       + (" Teams get picked at random at midnight. 🎲" if mode == "teams" else " Everyone plays for herself. 👑"),
+                       allowed_mentions=discord.AllowedMentions.none())
+    return f"Done: **{mode_name(mode)}**." + (" Teams get picked at random at midnight." if mode == "teams" else "")
+
+
+async def handle_pick(inter: discord.Interaction, challenge_id: int, mode: str):
+    ch = db.get_challenge(challenge_id)
+    if not ch or ch.mode or ch.status not in ("signup", "ready"):
+        return await deny(inter, "It's already decided. 💕")
+    if not can_pick(inter, ch):
+        return await deny(inter, "Only the commissioner can make the call. Vote with the buttons on the vote post!")
+    guild = inter.guild or bot.get_guild(ch.guild_id)
+    msg = await set_pick(guild, ch, mode, inter.user.id)
+    await inter.response.send_message(msg, ephemeral=inter.guild is not None)
+
+
+@challenge_group.command(name="mode", description="Commissioner: make the final call, teams or individual.")
+@app_commands.choices(mode=[app_commands.Choice(name="Teams", value="teams"),
+                            app_commands.Choice(name="Individual", value="individual")])
+async def challenge_mode(inter: discord.Interaction, mode: str):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or ch.status not in ("signup", "ready"):
+        return await deny(inter, "There's no challenge waiting to start.")
+    if ch.mode:
+        return await deny(inter, f"It's already set: **{mode_name(ch.mode)}**.")
+    await inter.response.send_message(await set_pick(inter.guild, ch, mode, inter.user.id), ephemeral=True)
 
 
 async def dm(user_id: int, text: str, view: discord.ui.View | None = None) -> bool:
@@ -461,6 +617,9 @@ async def challenge_status(inter: discord.Interaction):
     embed = discord.Embed(title=ch.name, color=PINK,
                           description=f"{pretty(ch.start)} – {pretty(ch.end)} · **{ch.status}**"
                                       + (f" · {ch.mode} mode" if ch.mode else "")
+                                      + (f"\nCommissioner's call: {ch.mode_pick}" if ch.mode_pick and not ch.mode else "")
+                                      + ("\nVote: {} teams, {} individual".format(*game.vote_tally(db, ch))
+                                         if not ch.mode and db.job_done(ch.id, "mode_vote", "posted") else "")
                                       + (f"\nSign-up deadline: {pretty(ch.signup_deadline)}"
                                          if ch.signup_deadline and ch.status == "signup" else ""))
     embed.add_field(name=f"Players ({len(players)})", value="\n".join(rows)[:1024] or "Nobody yet", inline=False)
@@ -486,12 +645,17 @@ def mode_line(ch: Challenge) -> str:
     if ch.mode == "individual":
         return "👑 It's **individual mode**: everyone plays for herself."
     ready = sum(1 for p in db.players(ch.id) if len(db.goals(ch.id, p["user_id"])) >= 3)
-    deadline = ch.signup_deadline or (ch.start - timedelta(days=1))
-    headed = (f"**team mode** ({config.TEAM_MODE_MIN_PLAYERS}+ players)" if ready >= config.TEAM_MODE_MIN_PLAYERS
-              else f"**individual mode** (team mode needs {config.TEAM_MODE_MIN_PLAYERS}+)")
-    removal = " Anyone without 3 goals by then is removed." if config.REMOVE_WITHOUT_GOALS else ""
-    return (f"👯‍♀️ **{ready} player{'s' if ready != 1 else ''} with goals so far**, so we're headed for {headed}. "
-            f"It's final when sign-ups close at 11:59 p.m. {tz_label()} {pretty(deadline)}.{removal}")
+    removal = " Anyone without 3 goals by midnight is removed." if config.REMOVE_WITHOUT_GOALS else ""
+    count = f"👯‍♀️ **{ready} player{'s' if ready != 1 else ''} with goals so far.**"
+    if ch.mode_pick:
+        return (f"{count} The commissioner picked **{'team' if ch.mode_pick == 'teams' else 'individual'} mode**"
+                + (", and teams get picked at random at midnight." if ch.mode_pick == "teams" else ".") + removal)
+    if db.job_done(ch.id, "mode_vote", "posted"):
+        t, i = game.vote_tally(db, ch)
+        return (f"{count} 🗳️ **Teams or individual?** Vote on the vote post. So far: **{t} teams, {i} individual**. "
+                "The commissioner makes the final call tonight; if it's teams, they're picked at random." + removal)
+    return (f"{count} 🗳️ On {pretty(game.mode_vote_day(ch))}, everyone votes **teams or individual** and the "
+            "commissioner makes the final call. If it's teams, they're picked at random.")
 
 
 def commands_embed() -> discord.Embed:
@@ -1411,6 +1575,10 @@ async def on_interaction(inter: discord.Interaction):
     try:
         if kind in ("join", "leave"):
             await handle_signup(inter, int(parts[2]), kind == "join")
+        elif kind == "vote":
+            await handle_vote(inter, int(parts[2]), parts[3])
+        elif kind == "pick":
+            await handle_pick(inter, int(parts[2]), parts[3])
         elif kind == "who":
             await handle_who(inter, int(parts[2]))
         elif kind == "quit":
@@ -1453,6 +1621,7 @@ async def handle_signup(inter: discord.Interaction, challenge_id: int, join: boo
         await inter.response.send_message("You're out." if changed else "You weren't signed up.", ephemeral=True)
     if changed:
         await refresh_signup(inter.guild, ch)
+        await refresh_vote(inter.guild, ch)
 
 
 def lineup_text(ch: Challenge, viewer_id: int) -> str:
@@ -1568,6 +1737,16 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
             for page in message_pages(overview_embeds(guild, ch)):
                 await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
 
+    # The day before the start: the teams-or-individual vote, then a nudge for the commissioner that night.
+    if ch.status in ("signup", "ready") and not ch.mode and today == game.mode_vote_day(ch):
+        if now.hour >= config.MODE_VOTE_HOUR and not db.job_done(ch.id, "mode_vote", "posted"):
+            db.mark_job(ch.id, "mode_vote", "posted")
+            await post_mode_vote(guild, ch, ann)
+        elif (now.hour >= config.MODE_DECIDE_HOUR and not ch.mode_pick
+              and not db.job_done(ch.id, "mode_vote", "nudge")):
+            db.mark_job(ch.id, "mode_vote", "nudge")
+            await nudge_commissioner(guild, ch, ann)
+
     if game.should_lock(ch, now):
         if len(db.players(ch.id)) < 2:
             # Not enough players: keep sign-ups open (drop the deadline) instead of shutting everyone out.
@@ -1579,9 +1758,16 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
                 await ann.send(f"{ch.name} needs at least 2 players, so sign-ups are staying open. "
                                "Tap **I'm in** on the sign-up post!")
             return
-        embed = await lock_signups(guild, ch)
+        embed = await lock_signups(guild, ch, today=today)
         if ann:
             await ann.send(embed=embed)
+        ch = db.get_challenge(ch.id)
+    if ch.status == "ready" and today >= ch.start and not ch.mode:
+        # Sign-ups closed early: settle team or solo now, at midnight before day one.
+        chosen, lines = await finalize_mode(guild, ch)
+        if ann:
+            await ann.send(embed=discord.Embed(title=f"{ch.name}: {chosen} mode", description="\n\n".join(lines),
+                                               color=PINK))
         ch = db.get_challenge(ch.id)
     if ch.status == "ready" and today >= ch.start:
         # Live from midnight on day one, so a 5 a.m. workout can be logged; the kickoff post waits for the morning.
