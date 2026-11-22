@@ -1123,3 +1123,26 @@ def test_tied_vote_falls_back_to_player_count():
     db.set_vote(ch.id, 3, "teams")  # not a player: doesn't count
     assert game.final_mode(db, db.get_challenge(ch.id), 2) == ("individual", "a tied vote, so the player count decided")
     assert game.final_mode(db, db.get_challenge(ch.id), 9)[0] == "teams"
+
+
+def test_commissioner_can_post_the_vote_early(monkeypatch):
+    start = date(2031, 8, 1)
+    players = list(range(2500, 2504))
+    db, guild, dms, ch = vote_setup(monkeypatch, 75, start, players)
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2031, 7, 25), 18))
+    run = asyncio.new_event_loop().run_until_complete
+    a = fake_inter(guild, 99)
+    a.followup = FakeChannel(0)
+    a.response.defer = lambda **kw: asyncio.sleep(0)
+    run(main.challenge_vote.callback(a))
+    assert "Posted the vote" in a.followup.sent[0][0]
+    post = guild.ann.sent[-1][1]["embed"]
+    assert "we start **Fri Aug 1**" in post.description
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2031, 7, 31), 12)))  # noon the day before: no second post
+    assert sum(1 for _, kw in guild.ann.sent if kw.get("embed") and "teams or individual" in kw["embed"].title) == 1
+    run(main.handle_vote(fake_inter(guild, 2500), ch.id, "teams"))
+    run(main.handle_vote(fake_inter(guild, 2501), ch.id, "teams"))
+    assert db.get_challenge(ch.id).mode is None  # 2 of 4 isn't more than half
+    run(main.handle_vote(fake_inter(guild, 2502), ch.id, "teams"))
+    assert db.get_challenge(ch.id).mode == "teams"

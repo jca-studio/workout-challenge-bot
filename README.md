@@ -58,7 +58,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | During sign-ups | Players tap **I'm in**, then **Add my goals**, which opens one form for all 3 goals, each written like "Yoga, 3 days" or "Affirmations, every day" (`/goals set` opens the same form). Check who's missing with `/challenge status` |
 | Last 3 days before the deadline | The bot DMs anyone signed up without 3 goals, once a day, with an **Add my goals** button |
 | The night before the deadline | At 8 p.m. the bot posts a warning that pings anyone without 3 goals (and DMs them): goals by the deadline, or they're removed |
-| The day before the start | At noon the bot posts the vote: how many are signed up, who they are, **Teams** and **Individual** buttons with a live tally, and a note that teams are picked at random. Only signed-up players can vote. The commissioner gets a DM with the tally and **Make it teams** / **Make it individual** buttons (or use `/challenge mode`), and a reminder at 9 p.m. if it's still open |
+| The day before the start | At noon the bot posts the vote: how many are signed up, who they are, **Teams** and **Individual** buttons with a live tally, and a note that teams are picked at random. Only signed-up players can vote. The commissioner gets a DM with the tally and **Make it teams** / **Make it individual** buttons (or use `/challenge mode`), and a reminder at 9 p.m. if it's still open. To post the vote earlier, run `/challenge vote` |
 | As soon as it's decided | When more than half of the signed-up players vote the same way, or the commissioner makes the call, voting closes and the bot posts the result with a countdown in hours to the start. If it's teams, it picks 2 random teams on the spot and lists them. Anyone who joins after that goes on the smaller team |
 | The night before the start | At 7 p.m. the bot posts the overview by itself, including where the vote stands. To send it earlier, or by DM, run `/challenge overview` |
 | At the deadline | Players without 3 goals are removed and DM'd and everyone else's goals are approved |
@@ -163,7 +163,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 84 tests, including a simulated month
+python -m pytest                 # 85 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```

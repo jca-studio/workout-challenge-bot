@@ -497,8 +497,10 @@ def vote_embed(ch: Challenge) -> discord.Embed:
     players = db.players(ch.id)
     t, i = game.vote_tally(db, ch)
     commish = f"<@{ch.created_by}>" if ch.created_by else "The commissioner"
+    when = (f"tomorrow ({pretty(ch.start)})" if game.now_local().date() == game.mode_vote_day(ch)
+            else pretty(ch.start))
     e = discord.Embed(title=f"🗳️ {ch.name}: teams or individual?", color=PINK, description=(
-        f"Okay ladies, we start **tomorrow ({pretty(ch.start)})** and we have **{len(players)} signed up**! 🎉\n\n"
+        f"Okay ladies, we start **{when}** and we have **{len(players)} signed up**! 🎉\n\n"
         "Vote below: **Teams** or **Individual**. As soon as more than half of the players pick one, it's decided.\n"
         f"🎲 If it's teams, everyone is **split at random** into **{' vs '.join(config.TEAM_NAMES)}**."))
     if ch.mode:
@@ -513,7 +515,7 @@ def vote_embed(ch: Challenge) -> discord.Embed:
         e.add_field(name="👩‍⚖️ Who decides", inline=False, value=(
             (f"{commish} picked **{mode_name(ch.mode_pick)}**. "
              if ch.mode_pick else f"{commish} makes the final call tonight. ")
-            + "If nothing has a majority by midnight, the side with more votes wins."))
+            + "If nothing has a majority by midnight before day one, the side with more votes wins."))
     return e
 
 
@@ -608,6 +610,24 @@ async def handle_pick(inter: discord.Interaction, challenge_id: int, mode: str):
     guild = inter.guild or bot.get_guild(ch.guild_id)
     msg = await set_pick(guild, ch, mode, inter.user.id)
     await inter.response.send_message(msg, ephemeral=inter.guild is not None)
+
+
+@challenge_group.command(name="vote", description="Commissioner: post the teams-or-individual vote now.")
+async def challenge_vote(inter: discord.Interaction):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or ch.status not in ("signup", "ready"):
+        return await deny(inter, "There's no challenge waiting to start.")
+    if ch.mode:
+        return await deny(inter, f"It's already decided: **{mode_name(ch.mode)}**.")
+    ann = channel(inter.guild, "announce_channel_id")
+    if not ann:
+        return await deny(inter, "Run `/setup` first.")
+    await inter.response.defer(ephemeral=True)
+    db.mark_job(ch.id, "mode_vote", "posted")  # so the noon post doesn't go up again
+    await post_mode_vote(inter.guild, ch, ann)
+    await inter.followup.send(f"Posted the vote in {ann.mention}. Votes so far carry over.", ephemeral=True)
 
 
 @challenge_group.command(name="mode", description="Commissioner: make the final call, teams or individual.")
