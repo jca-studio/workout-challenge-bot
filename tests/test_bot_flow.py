@@ -1146,3 +1146,35 @@ def test_commissioner_can_post_the_vote_early(monkeypatch):
     assert db.get_challenge(ch.id).mode is None  # 2 of 4 isn't more than half
     run(main.handle_vote(fake_inter(guild, 2502), ch.id, "teams"))
     assert db.get_challenge(ch.id).mode == "teams"
+
+
+def test_mission_post_failure_keeps_the_same_mission_and_falls_back(monkeypatch):
+    start = date(2031, 9, 7)
+    db, guild, dms, ch = vote_setup(monkeypatch, 76, start, [2600, 2601])
+    run = asyncio.new_event_loop().run_until_complete
+    db.import_missions(76, CSV)
+
+    class Locked(FakeChannel):
+        async def send(self, *a, **kw):
+            raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing Access")
+    locked = Locked(12)
+    orig = main.channel
+    monkeypatch.setattr(main, "channel", lambda g, key: locked if key == "mission_channel_id" else orig(g, key))
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 3)))
+    first = db.daily_mission(ch.id, start)["id"]
+    posts = [c for c, _ in guild.ann.sent if c and "Today's mini mission" in c]
+    assert len(posts) == 1  # fell back to the announce channel
+    for minute in range(3):
+        run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 4)))
+    assert db.daily_mission(ch.id, start)["id"] == first
+    assert len([c for c, _ in guild.ann.sent if c and "Today's mini mission" in c]) == 1
+
+    # nowhere to post: the mission stays the same on every retry
+    day2 = start + timedelta(days=1)
+    monkeypatch.setattr(main, "channel", lambda g, key: locked if key in ("mission_channel_id", "announce_channel_id") else orig(g, key))
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(day2, 3)))
+    picked = db.daily_mission(ch.id, day2)["id"]
+    for _ in range(5):
+        run(main.run_jobs(guild, db.get_challenge(ch.id), at(day2, 3)))
+    assert db.daily_mission(ch.id, day2)["id"] == picked
+    assert not db.job_done(ch.id, "mission", day2.isoformat())

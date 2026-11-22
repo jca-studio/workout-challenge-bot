@@ -165,7 +165,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 85 tests, including a simulated month
+python -m pytest                 # 86 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```

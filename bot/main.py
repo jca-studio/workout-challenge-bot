@@ -1350,6 +1350,21 @@ def complete_mission(ch: Challenge, user_id: int, proof_url: str | None, day: da
     return f"⚡ Mini mission done: **+{fmt(earned)}** pts."
 
 
+async def post_mission(guild: discord.Guild, day: date, m) -> bool:
+    """Post the day's mission in the mission channel, or the announce channel if the bot can't post there."""
+    tried = []
+    for where in (channel(guild, "mission_channel_id"), channel(guild, "announce_channel_id")):
+        if not where or where in tried:
+            continue
+        tried.append(where)
+        try:
+            await where.send(f"☀️ **Today's mini mission** ({pretty(day)})", embed=mission_embed(m))
+            return True
+        except discord.HTTPException:
+            log.exception("couldn't post the mini mission in #%s; check the bot's permissions there", getattr(where, "name", where.id))
+    return False
+
+
 def mission_embed(m) -> discord.Embed:
     e = discord.Embed(title=f"⚡ {m['theme']}", description=f"**{m['text']}**", color=GOLD)
     e.add_field(name="Points", value=fmt(m["points"]))
@@ -1861,13 +1876,14 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     in_range = ch.start <= today <= ch.end
 
     if in_range and now.hour >= config.MISSION_POST_HOUR and not db.job_done(ch.id, "mission", key):
-        m = game.pick_mission(db, ch, today)
-        if m:
-            db.set_daily_mission(ch.id, today, m["id"], now)
-            where = mission_channel(guild)
-            if where:
-                await where.send(f"☀️ **Today's mini mission** ({pretty(today)})",
-                                 embed=mission_embed(db.daily_mission(ch.id, today)))
+        # Pick the day's mission once. If posting fails, the next try posts the same one.
+        if not db.daily_mission(ch.id, today):
+            m = game.pick_mission(db, ch, today)
+            if m:
+                db.set_daily_mission(ch.id, today, m["id"], now)
+        today_m = db.daily_mission(ch.id, today)
+        if today_m and not await post_mission(guild, today, today_m):
+            return  # couldn't post anywhere: try again next minute
         db.mark_job(ch.id, "mission", key)
 
     if in_range and now.hour >= config.REMINDER_HOUR and not db.job_done(ch.id, "reminder", key):
