@@ -14,7 +14,7 @@ DATABASE_PATH = _env("DATABASE_PATH", "data/challenge.db")
 TZ = ZoneInfo(_env("TIMEZONE", "America/New_York"))
 
 REMINDER_HOUR = int(_env("REMINDER_HOUR", "18"))          # 6 p.m. reminder if you haven't checked in
-MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "4"))    # kickoff + daily mini mission
+MISSION_POST_HOUR = int(_env("MISSION_POST_HOUR", "3"))    # kickoff + daily mini mission (3 a.m.)
 STANDINGS_HOUR = int(_env("STANDINGS_HOUR", "5"))          # final standings after the last day
 ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "5"))              # daily roundup of yesterday
 SIGNUP_REMINDER_HOUR = int(_env("SIGNUP_REMINDER_HOUR", "10"))  # daily nudge while sign-ups are open
