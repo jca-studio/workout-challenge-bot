@@ -58,19 +58,22 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | During sign-ups | Players tap **I'm in**, then **Add my goals**, which opens one form for all 3 goals, each written like "Yoga, 3 days" or "Affirmations, every day" (`/goals set` opens the same form). Check who's missing with `/challenge status` |
 | Last 3 days before the deadline | The bot DMs anyone signed up without 3 goals, once a day, with an **Add my goals** button |
 | The night before the deadline | At 8 p.m. the bot posts a warning that pings anyone without 3 goals (and DMs them): goals by the deadline, or they're removed |
-| The night before the start | At 7 p.m. the bot posts the overview by itself, including whether it's team or solo. To send it earlier, or by DM, run `/challenge overview` |
-| At the deadline | Players without 3 goals are removed and DM'd, everyone else's goals are approved, the mode is set and teams are made |
+| The day before the start | At noon the bot posts the vote: how many are signed up, who they are, **Teams** and **Individual** buttons with a live tally, and a note that teams are picked at random. Only signed-up players can vote. The commissioner gets a DM with the tally and **Make it teams** / **Make it individual** buttons (or use `/challenge mode`), and a reminder at 9 p.m. if it's still open. To post the vote earlier, run `/challenge vote` |
+| As soon as it's decided | When more than half of the signed-up players vote the same way, or the commissioner makes the call, voting closes and the bot posts the result with a countdown in hours to the start. If it's teams, it picks 2 random teams on the spot and lists them. Anyone who joins after that goes on the smaller team |
+| The night before the start | At 7 p.m. the bot posts the overview by itself, including where the vote stands. To send it earlier, or by DM, run `/challenge overview` |
+| At the deadline | Players without 3 goals are removed and DM'd and everyone else's goals are approved |
+| Midnight before day one | If nothing was decided, the side with more votes wins (a tie or no votes goes by the player count) and teams are picked |
 | Morning of day one | At 7 a.m. the bot posts the kickoff welcome (teams, what to do today, proof, feedback, commands), then the first mini mission |
 | Anytime | `/challenge overview` posts a what-to-expect message in the announce channel (or `send_to: DM every player`): how it works, points, reminders and the daily schedule, commands, and everyone's goals |
 | Before the deadline (optional) | `/goals all` shows everyone's goals. Goals are approved automatically at the deadline, so you only need this to review them |
-| At the deadline | The bot closes sign-ups at midnight after the deadline day and makes teams. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
+| At the deadline | The bot closes sign-ups at midnight after the deadline day. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
 | Someone needs a nudge | `/commish warn` pings and DMs everyone without 3 goals right away ("by tonight" or "by tomorrow", depending on the deadline) |
 | Someone drops out | Players can run `/challenge leave`. The commissioner can run `/commish remove` (type REMOVE to confirm). Either way her points stop counting and team averages are recalculated |
 | After the last day | At 9 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
 
-**Team or individual:** 8 or more players makes teams, fewer is individual. To override, use `/challenge lock mode:teams` or `mode:individual`.
+**Team or individual:** a majority vote or the commissioner's call, whichever comes first, settles it right away. If neither happens by midnight, the side with more votes wins. If the vote is tied or nobody votes, 8 or more players makes teams and fewer is individual. To decide and make teams right away, use `/challenge lock mode:teams` or `mode:individual`.
 
 ### What the bot does on its own each day (Eastern time by default)
 
@@ -129,7 +132,9 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | Variable | Default | Options |
 | --- | --- | --- |
 | `PHOTO_MODE` | `optional` | `optional` (encouraged, never required), `required` (every goal), `per_goal` (the commissioner picks with `/commish photo`) |
-| `TEAM_MODE_MIN_PLAYERS` | `8` | Any number |
+| `TEAM_MODE_MIN_PLAYERS` | `8` | Any number. Only used when the vote is tied or empty and the commissioner didn't pick |
+| `MODE_VOTE_HOUR` | `12` | 0–23, when the teams-or-individual vote posts the day before the start |
+| `MODE_DECIDE_HOUR` | `21` | 0–23, when the commissioner gets a reminder to make the call |
 | `MISSION_WEEKLY_CAP` | `0` | Most mini mission points per player per week (`0` = no cap) |
 | `PERFECT_WEEK_BONUS` | `1` | Bonus points for hitting all 3 goals in a week |
 | `TEAM_SCORE_AVERAGE` | `true` | `false` compares team totals instead of averages |
@@ -158,7 +163,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 80 tests, including a simulated month
+python -m pytest                 # 85 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```

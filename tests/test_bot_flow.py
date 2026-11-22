@@ -242,7 +242,7 @@ def test_signup_post_has_rules_players_and_deadline():
         db.join(ch.id, uid)
     e = main.signup_embed(guild, ch)
     names = [f.name for f in e.fields]
-    assert names[:7] == ["🎯 Goals", "💪🏾 Teams", "📸 Checking in", "💋 Points", "⚡ Mini missions",
+    assert names[:7] == ["🎯 Goals", "💪🏾 Teams or solo", "📸 Checking in", "💋 Points", "⚡ Mini missions",
                          "🍑 Weekly schedule", "🏆 Prizes"]
     assert names[-1] == "👯‍♀️ Signed up (3)" and "<@202>" in e.fields[-1].value
     assert "Sign up by Fri Feb 26 at 11:59 p.m. ET" in e.description
@@ -271,11 +271,15 @@ def test_deadline_closes_signups_and_makes_teams(monkeypatch):
     assert not game.signups_open(ch, late)                              # midnight: closed
     run(main.run_jobs(guild, ch, late))
     ch = db.get_challenge(ch.id)
-    assert ch.status == "ready" and ch.mode == "teams"                  # locked 3 days before the start
+    assert ch.status == "ready" and ch.mode is None                     # locked 3 days out; mode waits for the vote
+    assert "watch for the vote on Wed Mar 31" in guild.ann.sent[-1][1]["embed"].description
     run(main.run_jobs(guild, ch, at(date(2027, 3, 30), 12)))
     assert db.get_challenge(ch.id).status == "ready"                    # doesn't start early
-    run(main.run_jobs(guild, ch, at(date(2027, 4, 1), 7)))
-    assert db.get_challenge(ch.id).status == "active"
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2027, 4, 1), 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and ch.mode == "teams"                 # no votes: 10 players -> teams
+    assert len(set(db.teams(ch.id).values())) == 2
+    assert any(kw.get("embed") and kw["embed"].title == "April: teams mode" for _, kw in guild.ann.sent)
 
 
 def test_deadline_with_too_few_players_stays_open():
@@ -706,8 +710,8 @@ def test_lead_up_warning_overview_removal_and_kickoff(monkeypatch):
                  if kw.get("embeds") and kw["embeds"][0].title.endswith("what to expect")]
     assert len(overviews) == 1
     assert "9 players with goals so far" in overviews[0][0].description
-    assert "headed for **team mode**" in overviews[0][0].description
-    assert "Anyone without 3 goals by then is removed" in overviews[0][0].description
+    assert "Teams or individual?" in overviews[0][0].description
+    assert "Anyone without 3 goals by midnight is removed" in overviews[0][0].description
     assert [e.title for e in overviews[0]][1] == "✅ How to check in and track your progress"
 
     ch = db.get_challenge(ch.id)
@@ -911,7 +915,7 @@ def test_one_player_leaving_the_server_doesnt_block_team_roles(monkeypatch):
     for uid in range(1900, 1910):
         db.join(ch.id, uid)
         db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
-    embed = asyncio.new_event_loop().run_until_complete(main.lock_signups(guild, ch))
+    embed = asyncio.new_event_loop().run_until_complete(main.lock_signups(guild, ch, today=date(2030, 2, 1)))
     assert "Removed (left the server): <@1909>" in embed.description
     assert not db.is_player(ch.id, gone)
     with_roles = {m.id for r in guild.roles if r.name in config.TEAM_NAMES for m in r.members}
@@ -945,3 +949,200 @@ def test_mention_lists_never_cut_a_mention_in_half():
     assert len(text) <= 1024 and text.endswith(" more") and "<@" in text
     assert all(part.startswith("<@") and part.endswith(">") for part in text.rsplit(" +", 1)[0].split(" "))
     assert main.mentions([1, 2]) == "<@1> <@2>"
+
+
+class EditableChannel(FakeChannel):
+    """A channel whose posts can be fetched and edited, like the vote post."""
+    def __init__(self, cid):
+        super().__init__(cid)
+        self.posts = {}
+
+    async def send(self, content=None, **kw):
+        self.sent.append((content, kw))
+        msg = SimpleNamespace(id=len(self.sent), jump_url="https://x", kw=kw)
+
+        async def edit(**new):
+            msg.kw = {**msg.kw, **new}
+        msg.edit = edit
+        self.posts[msg.id] = msg
+        return msg
+
+    async def fetch_message(self, mid):
+        return self.posts[mid]
+
+
+def vote_setup(monkeypatch, guild_id, start, players):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = guild_id
+    guild.ann = EditableChannel(10)
+    db.set_settings(guild_id, 10, 11, None)
+    monkeypatch.setattr(discord.utils, "get", lambda roles, name: next((r for r in roles if r.name == name), None))
+    dms = []
+
+    class U:
+        def __init__(self, uid):
+            self.uid = uid
+
+        async def send(self, content=None, **kw):
+            dms.append((self.uid, content or "", kw.get("view")))
+    monkeypatch.setattr(main.bot, "get_user", lambda uid: U(uid))
+    monkeypatch.setattr(main.bot, "get_guild", lambda gid: guild)
+    ch = db.create_challenge(guild_id, "Vote Month", start, start + timedelta(days=27), 99)
+    for uid in players:
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    return db, guild, dms, ch
+
+
+def test_day_before_vote_and_commissioner_call(monkeypatch):
+    start = date(2031, 3, 1)
+    players = list(range(2100, 2105))  # 5 players: the count rule alone would say individual
+    db, guild, dms, ch = vote_setup(monkeypatch, 71, start, players)
+    run = asyncio.new_event_loop().run_until_complete
+    eve = start - timedelta(days=1)
+
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 11)))  # before noon: no vote yet
+    assert not any(kw.get("embed") and "teams or individual" in kw["embed"].title for _, kw in guild.ann.sent)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 12)))
+    post = next(m for m in guild.ann.posts.values() if m.kw.get("embed") and "teams or individual" in m.kw["embed"].title)
+    e = post.kw["embed"]
+    assert "we have **5 signed up**" in e.description and "split at random" in e.description
+    assert "more than half" in e.description
+    assert [b.label for b in post.kw["view"].children] == ["Teams", "Individual"]
+    assert "<@99> makes the final call tonight" in e.fields[-1].value
+    prompt = [(c, v) for u, c, v in dms if u == 99]
+    assert len(prompt) == 1 and "0 teams, 0 individual" in prompt[0][0]
+    assert [b.label for b in prompt[0][1].children] == ["Make it teams", "Make it individual"]
+
+    # 2 of 5 isn't a majority yet; outsiders can't vote
+    for uid, choice in zip(players, ["individual", "teams"]):
+        run(main.handle_vote(fake_inter(guild, uid), ch.id, choice))
+    outsider = fake_inter(guild, 5555)
+    run(main.handle_vote(outsider, ch.id, "teams"))
+    assert "Only players who signed up" in outsider.response.sent[0][0]
+    assert db.get_challenge(ch.id).mode is None and "Teams: **1**" in post.kw["embed"].fields[0].value
+
+    # a player can't make the call; the commissioner can, from her DM, and it's settled right away
+    nope = fake_inter(guild, 2101)
+    monkeypatch.setattr(main, "is_commish", lambda inter: False)
+    run(main.handle_pick(nope, ch.id, "individual"))
+    assert "Only the commissioner" in nope.response.sent[0][0]
+    monkeypatch.setattr(game, "now_local", lambda: at(eve, 14))
+    from_dm = SimpleNamespace(user=SimpleNamespace(id=99), guild=None, guild_id=None, response=FakeResponse())
+    run(main.handle_pick(from_dm, ch.id, "individual"))
+    assert from_dm.response.sent[0][0].startswith("Done: **Individual**")
+    ch = db.get_challenge(ch.id)
+    assert ch.mode == "individual" and not db.teams(ch.id)
+    roundup = guild.ann.sent[-1][1]["embed"]
+    assert roundup.title == "🗳️ The votes are in: it's individual!"
+    assert "starts in 10 hours" in roundup.description  # 2:05 p.m. -> midnight, rounded up
+    assert "by the commissioner's call" in roundup.description
+    assert post.kw["view"] is None and "Voting is closed" in post.kw["embed"].fields[0].value
+    late = fake_inter(guild, 2102)
+    run(main.handle_vote(late, ch.id, "teams"))
+    assert "Voting is closed" in late.response.sent[0][0]
+
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))  # already decided: no 9 p.m. nudge
+    assert len([1 for u, _, _ in dms if u == 99]) == 1
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and ch.mode == "individual"
+    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
+    assert lock.title == "Sign-ups closed: 5 players, individual mode"
+
+
+def test_majority_vote_picks_teams_on_the_spot(monkeypatch):
+    start = date(2031, 5, 1)
+    players = list(range(2200, 2205))
+    db, guild, dms, ch = vote_setup(monkeypatch, 72, start, players)
+    run = asyncio.new_event_loop().run_until_complete
+    eve = start - timedelta(days=1)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 12)))
+    monkeypatch.setattr(game, "now_local", lambda: at(eve, 15))
+    for uid in players[:2]:
+        run(main.handle_vote(fake_inter(guild, uid), ch.id, "teams"))
+    assert db.get_challenge(ch.id).mode is None
+    third = fake_inter(guild, players[2])
+    run(main.handle_vote(third, ch.id, "teams"))  # 3 of 5: majority
+    assert "that's a majority" in third.response.sent[0][0]
+    ch = db.get_challenge(ch.id)
+    teams = db.teams(ch.id)
+    assert ch.mode == "teams" and set(teams) == set(players)
+    assert sorted(list(teams.values()).count(t) for t in config.TEAM_NAMES) == [2, 3]
+    roundup = guild.ann.sent[-1][1]["embed"]
+    assert roundup.title == "🗳️ The votes are in: it's teams!"
+    assert "starts in 9 hours" in roundup.description and "picked at random" in roundup.description
+    assert "majority vote (3 teams, 0 individual, of 5 players)" in roundup.description
+    for t in config.TEAM_NAMES:
+        assert f"**{t}**" in roundup.description
+    assert all(f"<@{u}>" in roundup.description for u in players)
+
+    # someone joins after teams are picked: she lands on the smaller team
+    small = min(config.TEAM_NAMES, key=lambda t: list(teams.values()).count(t))
+    joiner = fake_inter(guild, 2299)
+    run(main.handle_signup(joiner, ch.id, True))
+    assert db.teams(ch.id)[2299] == small and f"you're on **{small}**" in joiner.response.sent[0][0]
+
+    # no nudge, and midnight keeps the same teams (2299 has no goals, so she's removed)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))
+    assert len([1 for u, _, _ in dms if u == 99]) == 1
+    before = {u: t for u, t in db.teams(ch.id).items() if u != 2299}
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.status == "active" and db.teams(ch.id) == before
+    lock = next(kw["embed"] for _, kw in guild.ann.sent if kw.get("embed") and kw["embed"].title.startswith("Sign-ups closed"))
+    assert lock.title == "Sign-ups closed: 5 players, teams mode"
+
+
+def test_no_majority_by_midnight_goes_with_more_votes(monkeypatch):
+    start = date(2031, 6, 1)
+    players = list(range(2400, 2406))
+    db, guild, dms, ch = vote_setup(monkeypatch, 74, start, players)
+    run = asyncio.new_event_loop().run_until_complete
+    eve = start - timedelta(days=1)
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 12)))
+    for uid, choice in zip(players, ["teams", "teams", "individual"]):  # 2-1 of 6: no majority
+        run(main.handle_vote(fake_inter(guild, uid), ch.id, choice))
+    assert db.get_challenge(ch.id).mode is None
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(eve, 21)))
+    nudges = [c for u, c, _ in dms if u == 99]
+    assert len(nudges) == 2 and "2 teams, 1 individual" in nudges[1]
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 0)))
+    ch = db.get_challenge(ch.id)
+    assert ch.mode == "teams" and len(set(db.teams(ch.id).values())) == 2
+
+
+def test_tied_vote_falls_back_to_player_count():
+    db = main.db
+    ch = db.create_challenge(73, "Tie", date(2031, 7, 1), date(2031, 7, 31), 99)
+    for uid in (1, 2):
+        db.join(ch.id, uid)
+    db.set_vote(ch.id, 1, "teams")
+    db.set_vote(ch.id, 2, "individual")
+    db.set_vote(ch.id, 3, "teams")  # not a player: doesn't count
+    assert game.final_mode(db, db.get_challenge(ch.id), 2) == ("individual", "a tied vote, so the player count decided")
+    assert game.final_mode(db, db.get_challenge(ch.id), 9)[0] == "teams"
+
+
+def test_commissioner_can_post_the_vote_early(monkeypatch):
+    start = date(2031, 8, 1)
+    players = list(range(2500, 2504))
+    db, guild, dms, ch = vote_setup(monkeypatch, 75, start, players)
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2031, 7, 25), 18))
+    run = asyncio.new_event_loop().run_until_complete
+    a = fake_inter(guild, 99)
+    a.followup = FakeChannel(0)
+    a.response.defer = lambda **kw: asyncio.sleep(0)
+    run(main.challenge_vote.callback(a))
+    assert "Posted the vote" in a.followup.sent[0][0]
+    post = guild.ann.sent[-1][1]["embed"]
+    assert "we start **Fri Aug 1**" in post.description
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(date(2031, 7, 31), 12)))  # noon the day before: no second post
+    assert sum(1 for _, kw in guild.ann.sent if kw.get("embed") and "teams or individual" in kw["embed"].title) == 1
+    run(main.handle_vote(fake_inter(guild, 2500), ch.id, "teams"))
+    run(main.handle_vote(fake_inter(guild, 2501), ch.id, "teams"))
+    assert db.get_challenge(ch.id).mode is None  # 2 of 4 isn't more than half
+    run(main.handle_vote(fake_inter(guild, 2502), ch.id, "teams"))
+    assert db.get_challenge(ch.id).mode == "teams"

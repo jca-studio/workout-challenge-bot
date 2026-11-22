@@ -68,6 +68,27 @@ def choose_mode(player_count: int, override: str = "auto") -> str:
     return "teams" if player_count >= config.TEAM_MODE_MIN_PLAYERS else "individual"
 
 
+def vote_tally(db: DB, challenge: Challenge) -> tuple[int, int]:
+    """(teams, individual) votes from players still in the challenge."""
+    votes = list(db.votes(challenge.id).values())
+    return votes.count("teams"), votes.count("individual")
+
+
+def final_mode(db: DB, challenge: Challenge, player_count: int) -> tuple[str, str]:
+    """Team or solo, and why: the commissioner's call, else the vote, else the player count."""
+    if challenge.mode_pick in ("teams", "individual"):
+        return challenge.mode_pick, "the commissioner's call"
+    teams, solo = vote_tally(db, challenge)
+    if teams != solo:
+        return ("teams" if teams > solo else "individual"), f"the vote ({teams} teams, {solo} individual)"
+    why = "a tied vote" if teams else "no votes"
+    return choose_mode(player_count), f"{why}, so the player count decided"
+
+
+def mode_vote_day(challenge: Challenge) -> date:
+    return challenge.start - timedelta(days=1)
+
+
 def assign_teams(user_ids: list[int], rng: random.Random | None = None) -> dict[int, str]:
     """Random split, as even as possible. Everyone has 3 goals, so equal headcount = equal potential points."""
     rng = rng or random.Random()

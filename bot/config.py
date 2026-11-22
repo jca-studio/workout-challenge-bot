@@ -20,6 +20,9 @@ ROUNDUP_HOUR = int(_env("ROUNDUP_HOUR", "8"))              # daily roundup of ye
 SIGNUP_REMINDER_HOUR = int(_env("SIGNUP_REMINDER_HOUR", "10"))  # daily nudge while sign-ups are open
 OVERVIEW_HOUR = int(_env("OVERVIEW_HOUR", "19"))           # what-to-expect post, the night before the start
 GOAL_NUDGE_DAYS = int(_env("GOAL_NUDGE_DAYS", "3"))        # DM players without goals this many days before the deadline
+# The day before the start: players vote teams or individual, and the commissioner makes the final call.
+MODE_VOTE_HOUR = int(_env("MODE_VOTE_HOUR", "12"))         # vote post goes up
+MODE_DECIDE_HOUR = int(_env("MODE_DECIDE_HOUR", "21"))     # nudge the commissioner if she hasn't picked
 WARNING_HOUR = int(_env("WARNING_HOUR", "20"))             # removal warning, the night before the deadline
 # At the deadline: remove players without 3 goals, and approve everyone else's goals automatically.
 REMOVE_WITHOUT_GOALS = _env("REMOVE_WITHOUT_GOALS", "true").lower() == "true"

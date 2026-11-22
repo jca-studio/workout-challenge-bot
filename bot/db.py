@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS challenges (
     signup_channel_id INTEGER,
     signup_message_id INTEGER,
     signup_deadline TEXT,            -- last day to join (inclusive)
+    mode_pick TEXT,                  -- the commissioner's call (teams | individual), applied at the start
+    vote_channel_id INTEGER,
+    vote_message_id INTEGER,
     created_by INTEGER,
     created_at TEXT NOT NULL
 );
@@ -88,6 +91,12 @@ CREATE TABLE IF NOT EXISTS crowns (
     original_nick TEXT,              -- what to put back when the crown moves on
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS mode_votes (
+    challenge_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    choice TEXT NOT NULL,            -- teams | individual
+    PRIMARY KEY (challenge_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS job_log (
     challenge_id INTEGER NOT NULL,
     job TEXT NOT NULL,
@@ -120,6 +129,10 @@ class Challenge:
     signup_channel_id: int | None
     signup_message_id: int | None
     signup_deadline: date | None = None
+    created_by: int | None = None
+    mode_pick: str | None = None
+    vote_channel_id: int | None = None
+    vote_message_id: int | None = None
 
 
 @dataclass
@@ -141,8 +154,10 @@ class DB:
         self.conn.executescript(SCHEMA)
         # Databases created before the sign-up deadline existed get the new column.
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(challenges)")}
-        if "signup_deadline" not in cols:
-            self.conn.execute("ALTER TABLE challenges ADD COLUMN signup_deadline TEXT")
+        for col, kind in (("signup_deadline", "TEXT"), ("mode_pick", "TEXT"),
+                          ("vote_channel_id", "INTEGER"), ("vote_message_id", "INTEGER")):
+            if col not in cols:
+                self.conn.execute(f"ALTER TABLE challenges ADD COLUMN {col} {kind}")
         gcols = {r[1] for r in self.conn.execute("PRAGMA table_info(guild_settings)")}
         if "mission_channel_id" not in gcols:
             self.conn.execute("ALTER TABLE guild_settings ADD COLUMN mission_channel_id INTEGER")
@@ -178,7 +193,8 @@ class DB:
         return Challenge(r["id"], r["guild_id"], r["name"], date.fromisoformat(r["start_date"]),
                          date.fromisoformat(r["end_date"]), r["status"], r["mode"],
                          r["signup_channel_id"], r["signup_message_id"],
-                         date.fromisoformat(r["signup_deadline"]) if r["signup_deadline"] else None)
+                         date.fromisoformat(r["signup_deadline"]) if r["signup_deadline"] else None,
+                         r["created_by"], r["mode_pick"], r["vote_channel_id"], r["vote_message_id"])
 
     def current_challenge(self, guild_id: int) -> Challenge | None:
         r = self.conn.execute(
@@ -225,6 +241,18 @@ class DB:
     def is_player(self, challenge_id: int, user_id: int) -> bool:
         return self.conn.execute("SELECT 1 FROM players WHERE challenge_id=? AND user_id=?",
                                  (challenge_id, user_id)).fetchone() is not None
+
+    def set_vote(self, challenge_id: int, user_id: int, choice: str):
+        self._x("INSERT INTO mode_votes (challenge_id,user_id,choice) VALUES (?,?,?) "
+                "ON CONFLICT(challenge_id,user_id) DO UPDATE SET choice=excluded.choice",
+                (challenge_id, user_id, choice))
+
+    def votes(self, challenge_id: int) -> dict[int, str]:
+        """Votes from players still in the challenge (anyone who left or was removed doesn't count)."""
+        rows = self.conn.execute(
+            "SELECT v.user_id, v.choice FROM mode_votes v JOIN players p "
+            "ON p.challenge_id=v.challenge_id AND p.user_id=v.user_id WHERE v.challenge_id=?", (challenge_id,))
+        return {r[0]: r[1] for r in rows}
 
     def set_team(self, challenge_id: int, user_id: int, team: str | None):
         self._x("UPDATE players SET team=? WHERE challenge_id=? AND user_id=?", (team, challenge_id, user_id))
