@@ -1520,16 +1520,27 @@ def roundup_embeds(ch: Challenge, day: date) -> list[discord.Embed]:
     for uid, pws in s.player_weeks.items():
         pw = pws[-1]
         star = " ✨" if pw.perfect else ""
-        goals = " · ".join(f"{g.name[:22]} {progress_bar(g.days_done, g.target)}" for g in pw.goals) or "no goals yet"
+        goals = "\n".join(f"{progress_bar(g.days_done, g.target)} {g.name[:60]}" for g in pw.goals) or "no goals yet"
         rows.append((pw.points, f"**<@{uid}>** · {fmt(pw.points)} pts{star}\n{goals}"))
     rows.sort(key=lambda r: -r[0])
-    text = "✅ = a day she hit that goal · ⬜ = days still to go this week\n\n" + "\n\n".join(r[1] for r in rows)
-    week_e = discord.Embed(
-        title=f"Week {week.number} so far" if not week_over else f"Week {week.number} goals",
-        description=text[:4096] if rows else "Nobody's playing yet.", color=GOLD)
-    week_e.set_footer(text="Week points include partial credit and the perfect week bonus ✨"
-                      + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
-    return [board, week_e]
+    title = f"Week {week.number} so far" if not week_over else f"Week {week.number} goals"
+    # One block per player (name, then a line per goal), split across embeds so nothing gets cut off.
+    chunks, cur = [], "✅ = a day she hit that goal · ⬜ = days still to go this week"
+    for _, block in rows:
+        if len(cur) + len(block) + 2 > 3900:
+            chunks.append(cur)
+            cur = block
+        else:
+            cur += "\n\n" + block
+    chunks.append(cur)
+    out = [board]
+    for i, text in enumerate(chunks):
+        e = discord.Embed(title=title if i == 0 else f"{title} (cont.)",
+                          description=text if rows else "Nobody's playing yet.", color=GOLD)
+        out.append(e)
+    out[-1].set_footer(text="Week points include partial credit and the perfect week bonus ✨"
+                       + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
+    return out
 
 
 def standings_embed(ch: Challenge, through_week: int | None, title: str) -> discord.Embed:
@@ -1997,12 +2008,14 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     if ch.start < today <= ch.end and now.hour >= config.ROUNDUP_HOUR and not db.job_done(ch.id, "roundup", key):
         db.mark_job(ch.id, "roundup", key)
         if ann:
-            await ann.send(embeds=roundup_embeds(ch, today - timedelta(days=1)))
+            for page in message_pages(roundup_embeds(ch, today - timedelta(days=1))):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
 
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")
         if ann:  # the last week's checkmarks first (it never gets a Saturday roundup), then the crowning
-            await ann.send(embeds=roundup_embeds(ch, ch.end))
+            for page in message_pages(roundup_embeds(ch, ch.end)):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
         await finish(guild, ch, ann)
 
 

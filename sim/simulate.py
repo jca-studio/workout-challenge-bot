@@ -708,7 +708,8 @@ async def stress():
             for goal in db.goals(ch.id, uid["user_id"]):
                 for k in range(5):
                     db.add_checkin(goal.id, uid["user_id"], START + timedelta(days=k), None)
-        check_message(f"{where} roundup", embeds=main.roundup_embeds(ch, START + timedelta(days=4)))
+        for page in main.message_pages(main.roundup_embeds(ch, START + timedelta(days=4))):
+            check_message(f"{where} roundup page", embeds=page)
         check_message(f"{where} standings", embed=main.standings_embed(ch, None, "final standings"))
         i = inter(ids[1])
         await main.handle_who(i, ch.id)

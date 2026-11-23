@@ -144,10 +144,10 @@ def test_month_of_jobs(monkeypatch):
     first = roundups[0]
     assert first[0].title == "☀️ Daily roundup: Tue Dec 1" and first[1].title == "Week 1 so far"
     # Dec 1 is a 4-day week: "every day" shrinks to 4 and "3 days" to 2
-    assert "**<@1>** · " in first[1].description and "Work out ✅⬜ · Brush teeth ✅⬜⬜⬜" in first[1].description
-    assert "**<@9>** · 0 pts\nWork out ⬜⬜ · Brush teeth ⬜⬜⬜⬜ · Veggies ⬜⬜⬜⬜" in first[1].description
+    assert "**<@1>** · " in first[1].description and "✅⬜ Work out\n✅⬜⬜⬜ Brush teeth" in first[1].description
+    assert "**<@9>** · 0 pts\n⬜⬜ Work out\n⬜⬜⬜⬜ Brush teeth\n⬜⬜⬜⬜ Veggies" in first[1].description
     week_end = next(r for r in roundups if r[0].title.startswith("🏆 Week 2 final"))
-    assert ("**<@1>** · 4 pts ✨\nWork out ✅✅✅ · Brush teeth ✅✅✅✅✅✅✅ · Veggies ✅✅✅✅✅✅✅"
+    assert ("**<@1>** · 4 pts ✨\n✅✅✅ Work out\n✅✅✅✅✅✅✅ Brush teeth\n✅✅✅✅✅✅✅ Veggies"
             in week_end[1].description)  # perfect: 3 goals + bonus
     print("\n" + week_end[0].title + "\n" + week_end[0].fields[-1].value + "\n\n" + week_end[1].description)
     assert any("Cue the fanfare" in t for t in texts)
