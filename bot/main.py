@@ -1521,11 +1521,16 @@ def roundup_embeds(ch: Challenge, day: date) -> list[discord.Embed]:
         pw = pws[-1]
         star = " ✨" if pw.perfect else ""
         goals = "\n".join(f"{progress_bar(g.days_done, g.target)} {g.name[:60]}" for g in pw.goals) or "no goals yet"
-        rows.append((pw.points, f"**<@{uid}>** · {fmt(pw.points)} pts{star}\n{goals}"))
+        mission_days = {d for d, _ in db.mission_completions(ch.id, uid) if week.contains(d)}
+        mission_pts = game.mission_points_this_week(db, ch, uid, week.start)
+        done = min(len(mission_days), week.days)
+        missions = "🟪" * done + "⬜" * (week.days - done) + f" Mini missions · +{fmt(mission_pts)}"
+        total = pw.points + mission_pts
+        rows.append((total, f"**<@{uid}>** · {fmt(total)} pts{star}\n{goals}\n{missions}"))
     rows.sort(key=lambda r: -r[0])
     title = f"Week {week.number} so far" if not week_over else f"Week {week.number} goals"
     # One block per player (name, then a line per goal), split across embeds so nothing gets cut off.
-    chunks, cur = [], "✅ = a day she hit that goal · ⬜ = days still to go this week"
+    chunks, cur = [], "✅ = a day she hit that goal · 🟪 = a mini mission done · ⬜ = days still to go"
     for _, block in rows:
         if len(cur) + len(block) + 2 > 3900:
             chunks.append(cur)
@@ -1538,7 +1543,7 @@ def roundup_embeds(ch: Challenge, day: date) -> list[discord.Embed]:
         e = discord.Embed(title=title if i == 0 else f"{title} (cont.)",
                           description=text if rows else "Nobody's playing yet.", color=GOLD)
         out.append(e)
-    out[-1].set_footer(text="Week points include partial credit and the perfect week bonus ✨"
+    out[-1].set_footer(text="Week points include partial credit, the perfect week bonus ✨ and mini missions"
                        + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
     return out
 

@@ -79,7 +79,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 ### What the bot does on its own each day (Eastern time by default)
 
 - **3 a.m.:** posts the day's mini mission in the mission channel, from that day's theme. About once a week it's a Random Mix-Up mission instead. Photos posted in the mission channel get a "Today's mini mission" button.
-- **5 a.m.:** posts a daily roundup of yesterday in the announce channel: the leaderboard, plus each player's progress on each goal this week (✅ for each day she hit it, ⬜ for days still to go). Saturday's roundup is the week's final standings.
+- **5 a.m.:** posts a daily roundup of yesterday in the announce channel: the leaderboard, plus each player's week: one line per goal (✅ for each day she hit it, ⬜ for days still to go) and a mini mission line (🟪 for each day she did the mission, plus her mission points). The points next to her name are her full week, missions included. Saturday's roundup is the week's final standings.
 - **6 p.m.:** sends a DM reminder to anyone who hasn't checked in that day, with a button for each goal. Players with DMs off get pinged in the announce channel.
 - **Friday at midnight:** the week locks.
 
@@ -168,7 +168,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 90 tests, including a simulated month
+python -m pytest                 # 91 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```
