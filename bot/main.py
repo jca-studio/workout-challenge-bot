@@ -128,6 +128,30 @@ async def log_checkin(ch: Challenge, user: discord.abc.User, goal: Goal, day: da
     return msg
 
 
+def undo_view(goal_id: int, day: date) -> discord.ui.View:
+    return make_view([discord.ui.Button(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary,
+                                        custom_id=f"mb:undo:{goal_id}:{day.isoformat()}")])
+
+
+def checkin_reply(result: str, goal: Goal, day: date) -> dict:
+    """A check-in reply, with an Undo button when something was actually logged."""
+    return {"content": result, **({"view": undo_view(goal.id, day)} if result.startswith("Logged") else {})}
+
+
+def undo_checkin(ch: Challenge, user_id: int, goal: Goal, day: date) -> str:
+    """Players can take back their own check-in until that week locks."""
+    if goal.user_id != user_id:
+        return "That goal isn't yours."
+    ok, why = game.checkin_allowed(ch, day, game.now_local())
+    if not ok and "locked" in why:
+        return "That week is locked, so it can't be changed. Ask the commissioner."
+    if not db.remove_checkin(goal.id, day):
+        return f"**{goal.name}** wasn't logged for {pretty(day)}, so there's nothing to undo."
+    week = week_for(day, challenge_weeks(ch.start, ch.end))
+    done = len(db.checkin_days(goal.id, week.start, week.end))
+    return f"↩️ Removed **{goal.name}** for {pretty(day)}.  {progress_bar(done, scaled_target(goal.target_days, week.days))}"
+
+
 # ---------- setup ----------
 
 @bot.tree.command(description="Admins: set the channels the bot uses.")
@@ -737,6 +761,7 @@ def commands_embed() -> discord.Embed:
         "`/goals set` · fill in or edit your 3 goals (before the start)\n"
         "`/goals view` · see your goals, or someone else's\n"
         "`/checkin` · log a goal, for today or an earlier day this week\n"
+        "`/undo-checkin` · take back a check-in you logged by mistake\n"
         "`/mission today` · see today's mini mission\n"
         "`/mission done` · mark the mini mission done\n"
         "`/mystats` · your week so far and your total\n"
@@ -759,7 +784,7 @@ def proof_feedback_embed(guild: discord.Guild) -> discord.Embed:
     e.add_field(name="📸 Post a photo (easiest)", inline=False, value=(
         f"Post a photo in {where}. I'll reply with a button for each of your goals. **Tap the goal it's for** "
         "and that photo is your check-in for that goal today. One photo can cover more than one goal: tap each "
-        "one it counts for."))
+        "one it counts for. Tapped the wrong one? Hit **↩️ Undo** on the reply, or use `/undo-checkin`."))
     e.add_field(name="⌨️ Use /checkin", inline=False, value=(
         "`/checkin` → pick the goal → pick the day (today or an earlier day this week). You can attach a photo, "
         "or skip it. Good for catching up on a day you forgot."))
@@ -1265,7 +1290,23 @@ async def checkin(inter: discord.Interaction, goal: int, day: str | None = None,
         else:
             proof_url = photo.url
     msg = await log_checkin(ch, inter.user, g, d, proof_url, inter.guild)
-    await inter.followup.send(msg, ephemeral=True)
+    await inter.followup.send(**checkin_reply(msg, g, d), ephemeral=True)
+
+
+@bot.tree.command(name="undo-checkin", description="Remove one of your own check-ins (until that week locks).")
+@app_commands.describe(goal="Which goal", day="The day to remove. Defaults to today.")
+@app_commands.autocomplete(goal=goal_autocomplete, day=day_autocomplete)
+async def undo_checkin_cmd(inter: discord.Interaction, goal: int, day: str | None = None):
+    ch = db.current_challenge(inter.guild_id)
+    if not ch or ch.status != "active":
+        return await deny(inter, "The challenge isn't running right now.")
+    g = next((x for x in db.goals(ch.id, inter.user.id) if x.slot == goal), None)
+    if not g:
+        return await deny(inter, "Pick one of your goals from the list.")
+    d = parse_day(day, game.now_local().date())
+    if not d:
+        return await deny(inter, "I couldn't read that day.")
+    await inter.response.send_message(undo_checkin(ch, inter.user.id, g, d), ephemeral=True)
 
 
 @bot.event
@@ -1678,6 +1719,8 @@ async def on_interaction(inter: discord.Interaction):
             await handle_goals_button(inter, int(parts[2]))
         elif kind == "p":
             await handle_proof_button(inter, int(parts[2]), parts[3], parts[4], parts[5] if len(parts) > 5 else None)
+        elif kind == "undo":
+            await handle_undo(inter, int(parts[2]), date.fromisoformat(parts[3]))
         elif kind in ("yes", "no"):
             await handle_reminder(inter, int(parts[2]), date.fromisoformat(parts[3]), kind == "yes")
     except Exception:
@@ -1757,10 +1800,12 @@ async def handle_proof_button(inter: discord.Interaction, owner: int, what: str,
         g = db.goal(int(ref))
         if not g or g.user_id != owner:
             return await deny(inter, "That goal isn't yours.")
-        result = await log_checkin(ch, inter.user, g, date.fromisoformat(day) if day else today, proof_url, inter.guild)
+        d = date.fromisoformat(day) if day else today
+        result = await log_checkin(ch, inter.user, g, d, proof_url, inter.guild)
+        await inter.response.send_message(**checkin_reply(result, g, d), ephemeral=True)
     else:
         result = complete_mission(ch, owner, proof_url, date.fromisoformat(ref))
-    await inter.response.send_message(result, ephemeral=True)
+        await inter.response.send_message(result, ephemeral=True)
     if result.startswith(("Logged", "⚡")):
         try:
             await inter.message.edit(content=inter.message.content + f"\n✅ {result.splitlines()[0]}")
@@ -1776,7 +1821,15 @@ async def handle_reminder(inter: discord.Interaction, goal_id: int, day: date, y
         return await deny(inter, "That goal isn't yours.")
     ch = db.get_challenge(db.conn.execute("SELECT challenge_id FROM goals WHERE id=?", (goal_id,)).fetchone()[0])
     guild = bot.get_guild(ch.guild_id)
-    await inter.response.send_message(await log_checkin(ch, inter.user, g, day, None, guild))
+    await inter.response.send_message(**checkin_reply(await log_checkin(ch, inter.user, g, day, None, guild), g, day))
+
+
+async def handle_undo(inter: discord.Interaction, goal_id: int, day: date):
+    g = db.goal(goal_id)
+    if not g or g.user_id != inter.user.id:
+        return await deny(inter, "That goal isn't yours.")
+    ch = db.get_challenge(db.conn.execute("SELECT challenge_id FROM goals WHERE id=?", (goal_id,)).fetchone()[0])
+    await inter.response.edit_message(content=undo_checkin(ch, inter.user.id, g, day), view=None)
 
 
 # ---------- schedule ----------

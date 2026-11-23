@@ -1178,3 +1178,81 @@ def test_mission_post_failure_keeps_the_same_mission_and_falls_back(monkeypatch)
         run(main.run_jobs(guild, db.get_challenge(ch.id), at(day2, 3)))
     assert db.daily_mission(ch.id, day2)["id"] == picked
     assert not db.job_done(ch.id, "mission", day2.isoformat())
+
+
+def test_players_can_undo_their_own_checkins(monkeypatch):
+    db = main.db
+    guild = FakeGuild()
+    guild.id = 51
+    db.set_settings(51, 10, 11, None)
+    ch = db.create_challenge(51, "Undo", date(2030, 4, 1), date(2030, 4, 30), 99)  # Mon Apr 1
+    for uid in (2101, 2102):
+        db.join(ch.id, uid)
+        db.set_goals(ch.id, uid, [("Run", 3), ("Read", 5), ("Sleep", 7)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    ch = db.get_challenge(ch.id)
+    run = asyncio.new_event_loop().run_until_complete
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2030, 4, 2), 12))
+    run_goal = db.goals(ch.id, 2101)[0]
+
+    class Resp:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, content=None, **kw):
+            self.sent.append((content, kw))
+
+        async def edit_message(self, content=None, **kw):
+            self.sent.append((content, kw))
+
+        async def defer(self, **kw):
+            pass
+
+        def is_done(self):
+            return False
+
+    class Follow:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, content=None, **kw):
+            self.sent.append((content, kw))
+
+    def ui(uid):
+        return SimpleNamespace(user=SimpleNamespace(id=uid, mention=f"<@{uid}>"), guild=guild, guild_id=guild.id,
+                               response=Resp(), followup=Follow())
+
+    # logged via /checkin -> reply carries an Undo button
+    i = ui(2101)
+    run(main.checkin.callback(i, goal=1, day="2030-04-02", photo=None))
+    content, kw = i.followup.sent[-1]
+    assert content.startswith("Logged") and kw["view"].children[0].custom_id == f"mb:undo:{run_goal.id}:2030-04-02"
+
+    # someone else can't undo it
+    other = ui(2102)
+    run(main.handle_undo(other, run_goal.id, date(2030, 4, 2)))
+    assert "isn't yours" in other.response.sent[-1][0]
+    assert db.checkin_days(run_goal.id, date(2030, 4, 2), date(2030, 4, 2))
+
+    # she can
+    mine = ui(2101)
+    run(main.handle_undo(mine, run_goal.id, date(2030, 4, 2)))
+    assert not db.checkin_days(run_goal.id, date(2030, 4, 2), date(2030, 4, 2))
+
+    # /undo-checkin for an earlier day; nothing logged -> friendly no-op
+    db.add_checkin(run_goal.id, 2101, date(2030, 4, 1), None)
+    i = ui(2101)
+    run(main.undo_checkin_cmd.callback(i, goal=1, day="2030-04-01"))
+    assert i.response.sent[-1][0].startswith("↩️ Removed **Run**")
+    i = ui(2101)
+    run(main.undo_checkin_cmd.callback(i, goal=1, day="2030-04-01"))
+    assert "nothing to undo" in i.response.sent[-1][0]
+
+    # locked week can't be changed
+    db.add_checkin(run_goal.id, 2101, date(2030, 4, 3), None)
+    monkeypatch.setattr(game, "now_local", lambda: at(date(2030, 4, 10), 12))
+    i = ui(2101)
+    run(main.undo_checkin_cmd.callback(i, goal=1, day="2030-04-03"))
+    assert "locked" in i.response.sent[-1][0]
+    assert db.checkin_days(run_goal.id, date(2030, 4, 3), date(2030, 4, 3))
