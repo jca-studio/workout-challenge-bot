@@ -1148,6 +1148,38 @@ def test_commissioner_can_post_the_vote_early(monkeypatch):
     assert db.get_challenge(ch.id).mode == "teams"
 
 
+def test_mission_post_failure_keeps_the_same_mission_and_falls_back(monkeypatch):
+    start = date(2031, 9, 7)
+    db, guild, dms, ch = vote_setup(monkeypatch, 76, start, [2600, 2601])
+    run = asyncio.new_event_loop().run_until_complete
+    db.import_missions(76, CSV)
+
+    class Locked(FakeChannel):
+        async def send(self, *a, **kw):
+            raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing Access")
+    locked = Locked(12)
+    orig = main.channel
+    monkeypatch.setattr(main, "channel", lambda g, key: locked if key == "mission_channel_id" else orig(g, key))
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 3)))
+    first = db.daily_mission(ch.id, start)["id"]
+    posts = [c for c, _ in guild.ann.sent if c and "Today's mini mission" in c]
+    assert len(posts) == 1  # fell back to the announce channel
+    for minute in range(3):
+        run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 4)))
+    assert db.daily_mission(ch.id, start)["id"] == first
+    assert len([c for c, _ in guild.ann.sent if c and "Today's mini mission" in c]) == 1
+
+    # nowhere to post: the mission stays the same on every retry
+    day2 = start + timedelta(days=1)
+    monkeypatch.setattr(main, "channel", lambda g, key: locked if key in ("mission_channel_id", "announce_channel_id") else orig(g, key))
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(day2, 3)))
+    picked = db.daily_mission(ch.id, day2)["id"]
+    for _ in range(5):
+        run(main.run_jobs(guild, db.get_challenge(ch.id), at(day2, 3)))
+    assert db.daily_mission(ch.id, day2)["id"] == picked
+    assert not db.job_done(ch.id, "mission", day2.isoformat())
+
+
 def test_players_can_undo_their_own_checkins(monkeypatch):
     db = main.db
     guild = FakeGuild()
@@ -1224,3 +1256,40 @@ def test_players_can_undo_their_own_checkins(monkeypatch):
     run(main.undo_checkin_cmd.callback(i, goal=1, day="2030-04-03"))
     assert "locked" in i.response.sent[-1][0]
     assert db.checkin_days(run_goal.id, date(2030, 4, 3), date(2030, 4, 3))
+
+
+def test_mission_bonus_from_text_and_photo_buttons(monkeypatch):
+    m = {"text": "Share a healthy recipe (bonus: 0.5 total if you make it and post a photo)", "points": 0.25}
+    assert game.mission_bonus(m) == (0.5, "you make it and post a photo")
+    assert game.mission_bonus({"text": "Hit 10,000 steps", "points": 0.5}) is None
+
+    start = date(2031, 11, 3)  # a Monday
+    db, guild, dms, ch = vote_setup(monkeypatch, 77, start, [2700, 2701, 2702])
+    db.import_missions(77, "day,mission,points,effort,proof\n"
+                           "Munchie Monday,Share a healthy recipe (bonus: 0.5 total if you make it and post a photo),"
+                           "0.25,Quick,Post the recipe\n")
+    monkeypatch.setattr(config, "MIXUP_CHANCE", 0)
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 5)))
+    ch = db.get_challenge(ch.id)
+    today_m = db.daily_mission(ch.id, start)
+    assert "0.5 total with the bonus" in main.mission_embed(today_m).fields[0].value
+    monkeypatch.setattr(game, "now_local", lambda: at(start, 9))
+
+    # base: 0.25, with a tip about the bonus
+    msg = main.complete_mission(ch, 2700, None)
+    assert "+0.25" in msg and "Mini mission + bonus" in msg
+    # then she does the bonus: upgraded to 0.5 total, not 0.75
+    assert "now worth **0.5** pts total" in main.complete_mission(ch, 2700, "https://x", bonus=True)
+    assert dict(db.mission_completions(ch.id, 2700))[start] == 0.5
+    assert main.complete_mission(ch, 2700, "https://x", bonus=True) == "You already did this one."
+    # bonus straight away
+    assert "+0.5" in main.complete_mission(ch, 2701, "https://x", bonus=True)
+
+    # /mission done with bonus but no photo is turned away
+    inter = fake_inter(guild, 2702)
+    inter.followup = FakeChannel(0)
+    inter.response.defer = lambda **kw: asyncio.sleep(0)
+    run(main.mission_done.callback(inter, None, True))
+    assert "The bonus needs a photo" in inter.followup.sent[0][0]
+    assert start not in dict(db.mission_completions(ch.id, 2702))

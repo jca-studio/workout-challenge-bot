@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 from datetime import date, datetime, time, timedelta
 
 from . import config, scoring
@@ -118,6 +119,19 @@ def pick_mission(db: DB, challenge: Challenge, day: date, rng: random.Random | N
         return rng.choice(mixups)
     everything = db.missions(challenge.guild_id)
     return rng.choice(everything) if everything else None
+
+
+_BONUS = re.compile(r"\(\s*bonus:\s*([\d.]+)\s*(?:pts?|points?)?\s*total\b\s*(?:if\s+)?([^)]*)\)", re.I)
+
+
+def mission_bonus(m) -> tuple[float, str] | None:
+    """A mission written like "Share a recipe (bonus: 0.5 total if you make it and post a photo)" has a bonus:
+    (0.5, "you make it and post a photo"). Doing the bonus takes a photo."""
+    found = _BONUS.search(m["text"] or "")
+    if not found:
+        return None
+    total = float(found.group(1))
+    return (total, found.group(2).strip()) if total > m["points"] else None
 
 
 def mission_open(posted_at: datetime, now: datetime) -> bool:

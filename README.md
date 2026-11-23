@@ -63,7 +63,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | The night before the start | At 7 p.m. the bot posts the overview by itself, including where the vote stands. To send it earlier, or by DM, run `/challenge overview` |
 | At the deadline | Players without 3 goals are removed and DM'd and everyone else's goals are approved |
 | Midnight before day one | If nothing was decided, the side with more votes wins (a tie or no votes goes by the player count) and teams are picked |
-| Morning of day one | At 7 a.m. the bot posts the kickoff welcome (teams, what to do today, proof, feedback, commands), then the first mini mission |
+| Morning of day one | At 3 a.m. the bot posts the kickoff welcome (teams, what to do today, proof, feedback, commands), then the first mini mission |
 | Anytime | `/challenge overview` posts a what-to-expect message in the announce channel (or `send_to: DM every player`): how it works, points, reminders and the daily schedule, commands, and everyone's goals |
 | Before the deadline (optional) | `/goals all` shows everyone's goals. Goals are approved automatically at the deadline, so you only need this to review them |
 | At the deadline | The bot closes sign-ups at midnight after the deadline day. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
@@ -71,23 +71,23 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
 | Someone needs a nudge | `/commish warn` pings and DMs everyone without 3 goals right away ("by tonight" or "by tomorrow", depending on the deadline) |
 | Someone drops out | Players can run `/challenge leave`. The commissioner can run `/commish remove` (type REMOVE to confirm). Either way her points stop counting and team averages are recalculated |
-| After the last day | At 9 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
+| After the last day | At 5 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
 
 **Team or individual:** a majority vote or the commissioner's call, whichever comes first, settles it right away. If neither happens by midnight, the side with more votes wins. If the vote is tied or nobody votes, 8 or more players makes teams and fewer is individual. To decide and make teams right away, use `/challenge lock mode:teams` or `mode:individual`.
 
 ### What the bot does on its own each day (Eastern time by default)
 
-- **7 a.m.:** posts the day's mini mission in the mission channel, from that day's theme. About once a week it's a Random Mix-Up mission instead. Photos posted in the mission channel get a "Today's mini mission" button.
-- **8 a.m.:** posts a daily roundup of yesterday in the announce channel: the leaderboard, plus each player's progress on each goal this week (✅ for each day she hit it, ⬜ for days still to go). Saturday's roundup is the week's final standings.
-- **8 p.m.:** sends a DM reminder to anyone who hasn't checked in that day, with a button for each goal. Players with DMs off get pinged in the announce channel.
+- **3 a.m.:** posts the day's mini mission in the mission channel, from that day's theme. About once a week it's a Random Mix-Up mission instead. Photos posted in the mission channel get a "Today's mini mission" button.
+- **5 a.m.:** posts a daily roundup of yesterday in the announce channel: the leaderboard, plus each player's progress on each goal this week (✅ for each day she hit it, ⬜ for days still to go). Saturday's roundup is the week's final standings.
+- **6 p.m.:** sends a DM reminder to anyone who hasn't checked in that day, with a button for each goal. Players with DMs off get pinged in the announce channel.
 - **Friday at midnight:** the week locks.
 
 ---
 
 ## How players use it
 
-- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too.
-- **Check in without a photo:** `/checkin`, or tap the button in the 8 p.m. reminder.
+- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too, plus **Mini mission + bonus** when the mission has a bonus.
+- **Check in without a photo:** `/checkin`, or tap the button in the 6 p.m. reminder.
 - **Log an earlier day:** `/checkin` and pick the day. This works until Friday at midnight.
 - **Late nights:** a photo posted before 3 a.m. offers buttons for yesterday as well as today, and each week stays open until 3 a.m. Saturday.
 - **Dropping out:** `/challenge leave`.
@@ -106,6 +106,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 - **Perfect week:** hit all 3 goals and you get **+1 bonus point**, for a max of 4 a week.
 - **Team bonus:** every player on a team has a perfect week, so the team gets **+1 point per player** that week.
 - **Mini missions:** 0.25 (easy) or 0.5 (harder), open for 24 hours, no cap. They never count toward a perfect week.
+- **Mission bonuses:** some missions pay more if you go further, like sharing a recipe (0.25) vs. making it and posting a photo (0.5 total). The bonus needs a photo: tap **Mini mission + bonus** on a proof photo, or `/mission done bonus:True` with a photo. Doing the bonus after the base mission raises it to the bonus total; it doesn't add on top.
 - **Partial weeks:** in a short week at the start or end of the month, targets shrink to fit, rounding up.
 - **Team scores:** compared by average per player, so a team with one extra player can't win on headcount.
 - **Ties:** players or teams tied at the top share the win.
@@ -139,8 +140,10 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 | `PERFECT_WEEK_BONUS` | `1` | Bonus points for hitting all 3 goals in a week |
 | `TEAM_SCORE_AVERAGE` | `true` | `false` compares team totals instead of averages |
 | `TIMEZONE` | `America/New_York` | e.g. `America/Los_Angeles` |
-| `REMINDER_HOUR` | `20` | 0–23 |
-| `ROUNDUP_HOUR` | `8` | 0–23, when the daily roundup posts |
+| `MISSION_POST_HOUR` | `3` | 0–23, when the kickoff and the daily mini mission post |
+| `REMINDER_HOUR` | `18` | 0–23, when the check-in reminder goes out |
+| `ROUNDUP_HOUR` | `5` | 0–23, when the daily roundup posts |
+| `STANDINGS_HOUR` | `5` | 0–23, when final standings post after the last day |
 | `SIGNUP_REMINDER_HOUR` | `10` | 0–23, when the daily sign-up reminder posts |
 | `OVERVIEW_HOUR` | `19` | 0–23, when the overview posts the night before the start |
 | `WARNING_HOUR` | `20` | 0–23, when the removal warning posts the night before the deadline |
@@ -157,13 +160,14 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 1. Edit the Mini Mission Bank sheet and download it as CSV. It needs the columns Day, Mission and Points.
 2. Run `/missions import` and attach the file. This replaces the whole bank.
-3. To add a single mission, use `/missions add`. To go back to the built-in list, use `/missions reset`. `/missions count` shows how many each day has.
+3. To give a mission a bonus, write it in the Mission text like this: `Share a healthy recipe (bonus: 0.5 total if you make it and post a photo)`. The bot reads the bonus total from that and offers the bonus button.
+4. To add a single mission, use `/missions add`. To go back to the built-in list, use `/missions reset`. `/missions count` shows how many each day has.
 
 ## For whoever maintains the code
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 85 tests, including a simulated month
+python -m pytest                 # 88 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```

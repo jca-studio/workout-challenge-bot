@@ -1337,10 +1337,18 @@ async def on_message(message: discord.Message):
                                                  style=discord.ButtonStyle.primary,
                                                  custom_id=f"mb:p:{message.author.id}:g:{g.id}:{d.isoformat()}"))
     m = game.open_mission(db, ch, now)
-    done_days = {d for d, _ in db.mission_completions(ch.id, message.author.id)}
-    if m and date.fromisoformat(m["day"]) not in done_days:
-        buttons.append(discord.ui.Button(label="Today's mini mission", emoji="⚡", style=discord.ButtonStyle.success,
-                                         custom_id=f"mb:p:{message.author.id}:m:{m['day']}"))
+    done = dict(db.mission_completions(ch.id, message.author.id))
+    if m:
+        mday = date.fromisoformat(m["day"])
+        extra = game.mission_bonus(m)
+        if mday not in done:
+            buttons.append(discord.ui.Button(label="Today's mini mission", emoji="⚡",
+                                             style=discord.ButtonStyle.success,
+                                             custom_id=f"mb:p:{message.author.id}:m:{m['day']}"))
+        if extra and done.get(mday, 0) < extra[0]:
+            buttons.append(discord.ui.Button(label="Mini mission + bonus", emoji="🌟",
+                                             style=discord.ButtonStyle.success,
+                                             custom_id=f"mb:p:{message.author.id}:mb:{m['day']}"))
     if not buttons:
         await message.add_reaction("🔥")
         return
@@ -1362,7 +1370,8 @@ async def mission_today(inter: discord.Interaction):
 
 
 @mission_group.command(name="done", description="Mark today's mini mission done. Add a photo if you have one!")
-async def mission_done(inter: discord.Interaction, photo: discord.Attachment | None = None):
+@app_commands.describe(bonus="Did the bonus too? It needs a photo.")
+async def mission_done(inter: discord.Interaction, photo: discord.Attachment | None = None, bonus: bool = False):
     ch = db.current_challenge(inter.guild_id)
     if not ch or ch.status != "active" or not db.is_player(ch.id, inter.user.id):
         return await deny(inter, "You're not in a running challenge.")
@@ -1373,10 +1382,14 @@ async def mission_done(inter: discord.Interaction, photo: discord.Attachment | N
         if proof:
             posted = await proof.send(f"⚡ {inter.user.mention} did the mini mission!", file=await photo.to_file())
             proof_url = posted.jump_url
-    await inter.followup.send(complete_mission(ch, inter.user.id, proof_url), ephemeral=True)
+    if bonus and not photo:
+        return await inter.followup.send("The bonus needs a photo. Run `/mission done` again with `bonus` on and a "
+                                         "photo attached, or post it in the proof channel. 📸", ephemeral=True)
+    await inter.followup.send(complete_mission(ch, inter.user.id, proof_url, bonus=bonus), ephemeral=True)
 
 
-def complete_mission(ch: Challenge, user_id: int, proof_url: str | None, day: date | None = None) -> str:
+def complete_mission(ch: Challenge, user_id: int, proof_url: str | None, day: date | None = None,
+                     bonus: bool = False) -> str:
     now = game.now_local()
     m = game.open_mission(db, ch, now)
     if not m or (day and m["day"] != day.isoformat()):
@@ -1385,15 +1398,43 @@ def complete_mission(ch: Challenge, user_id: int, proof_url: str | None, day: da
     if left <= 0:
         return (f"Nice! You've already hit this week's {fmt(config.MISSION_WEEKLY_CAP)}-point mini mission cap, "
                 "so this one's for pride. 💅🏾")
-    if not db.complete_mission(ch.id, user_id, date.fromisoformat(m["day"]), m["points"], proof_url):
+    day_m = date.fromisoformat(m["day"])
+    extra = game.mission_bonus(m)
+    if bonus and not extra:
+        bonus = False  # this mission has no bonus
+    pts = extra[0] if bonus else m["points"]
+    if not db.complete_mission(ch.id, user_id, day_m, pts, proof_url):
+        if bonus and db.upgrade_mission(ch.id, user_id, day_m, pts, proof_url):
+            return f"⚡ Bonus done! This mini mission is now worth **{fmt(pts)}** pts total."
         return "You already did this one."
-    earned = min(m["points"], left)
-    return f"⚡ Mini mission done: **+{fmt(earned)}** pts."
+    earned = min(pts, left)
+    if bonus:
+        return f"⚡ Mini mission + bonus done: **+{fmt(earned)}** pts."
+    tip = (f"\nDid the bonus too? Post a photo in the proof channel and tap **Mini mission + bonus** for "
+           f"{fmt(extra[0])} total." if extra else "")
+    return f"⚡ Mini mission done: **+{fmt(earned)}** pts.{tip}"
+
+
+async def post_mission(guild: discord.Guild, day: date, m) -> bool:
+    """Post the day's mission in the mission channel, or the announce channel if the bot can't post there."""
+    tried = []
+    for where in (channel(guild, "mission_channel_id"), channel(guild, "announce_channel_id")):
+        if not where or where in tried:
+            continue
+        tried.append(where)
+        try:
+            await where.send(f"☀️ **Today's mini mission** ({pretty(day)})", embed=mission_embed(m))
+            return True
+        except discord.HTTPException:
+            log.exception("couldn't post the mini mission in #%s; check the bot's permissions there", getattr(where, "name", where.id))
+    return False
 
 
 def mission_embed(m) -> discord.Embed:
     e = discord.Embed(title=f"⚡ {m['theme']}", description=f"**{m['text']}**", color=GOLD)
-    e.add_field(name="Points", value=fmt(m["points"]))
+    extra = game.mission_bonus(m)
+    e.add_field(name="Points", value=fmt(m["points"]) + (f" · **{fmt(extra[0])} total with the bonus** (photo)"
+                                                          if extra else ""))
     if m["proof"]:
         e.add_field(name="Proof", value=m["proof"])
     e.set_footer(text="You have 24 hours. Post a photo in the proof channel or use /mission done.")
@@ -1789,7 +1830,7 @@ async def handle_proof_button(inter: discord.Interaction, owner: int, what: str,
         result = await log_checkin(ch, inter.user, g, d, proof_url, inter.guild)
         await inter.response.send_message(**checkin_reply(result, g, d), ephemeral=True)
     else:
-        result = complete_mission(ch, owner, proof_url, date.fromisoformat(ref))
+        result = complete_mission(ch, owner, proof_url, date.fromisoformat(ref), bonus=(what == "mb"))
         await inter.response.send_message(result, ephemeral=True)
     if result.startswith(("Logged", "⚡")):
         try:
@@ -1914,13 +1955,14 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     in_range = ch.start <= today <= ch.end
 
     if in_range and now.hour >= config.MISSION_POST_HOUR and not db.job_done(ch.id, "mission", key):
-        m = game.pick_mission(db, ch, today)
-        if m:
-            db.set_daily_mission(ch.id, today, m["id"], now)
-            where = mission_channel(guild)
-            if where:
-                await where.send(f"☀️ **Today's mini mission** ({pretty(today)})",
-                                 embed=mission_embed(db.daily_mission(ch.id, today)))
+        # Pick the day's mission once. If posting fails, the next try posts the same one.
+        if not db.daily_mission(ch.id, today):
+            m = game.pick_mission(db, ch, today)
+            if m:
+                db.set_daily_mission(ch.id, today, m["id"], now)
+        today_m = db.daily_mission(ch.id, today)
+        if today_m and not await post_mission(guild, today, today_m):
+            return  # couldn't post anywhere: try again next minute
         db.mark_job(ch.id, "mission", key)
 
     if in_range and now.hour >= config.REMINDER_HOUR and not db.job_done(ch.id, "reminder", key):
