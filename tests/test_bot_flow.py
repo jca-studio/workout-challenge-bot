@@ -144,10 +144,10 @@ def test_month_of_jobs(monkeypatch):
     first = roundups[0]
     assert first[0].title == "☀️ Daily roundup: Tue Dec 1" and first[1].title == "Week 1 so far"
     # Dec 1 is a 4-day week: "every day" shrinks to 4 and "3 days" to 2
-    assert "**<@1>** · " in first[1].description and "Work out ✅⬜ · Brush teeth ✅⬜⬜⬜" in first[1].description
-    assert "**<@9>** · 0 pts\nWork out ⬜⬜ · Brush teeth ⬜⬜⬜⬜ · Veggies ⬜⬜⬜⬜" in first[1].description
+    assert "**<@1>** · " in first[1].description and "✅⬜ Work out\n✅⬜⬜⬜ Brush teeth" in first[1].description
+    assert "**<@9>** · 0 pts\n⬜⬜ Work out\n⬜⬜⬜⬜ Brush teeth\n⬜⬜⬜⬜ Veggies" in first[1].description
     week_end = next(r for r in roundups if r[0].title.startswith("🏆 Week 2 final"))
-    assert ("**<@1>** · 4 pts ✨\nWork out ✅✅✅ · Brush teeth ✅✅✅✅✅✅✅ · Veggies ✅✅✅✅✅✅✅"
+    assert ("**<@1>** · 4 pts ✨\n✅✅✅ Work out\n✅✅✅✅✅✅✅ Brush teeth\n✅✅✅✅✅✅✅ Veggies"
             in week_end[1].description)  # perfect: 3 goals + bonus
     print("\n" + week_end[0].title + "\n" + week_end[0].fields[-1].value + "\n\n" + week_end[1].description)
     assert any("Cue the fanfare" in t for t in texts)
@@ -1293,3 +1293,48 @@ def test_mission_bonus_from_text_and_photo_buttons(monkeypatch):
     run(main.mission_done.callback(inter, None, True))
     assert "The bonus needs a photo" in inter.followup.sent[0][0]
     assert start not in dict(db.mission_completions(ch.id, 2702))
+
+
+def test_proof_reply_shows_what_was_logged_and_whats_left():
+    def btn(label, cid):
+        return SimpleNamespace(label=label, emoji="✅", style=discord.ButtonStyle.primary, custom_id=cid)
+    row = SimpleNamespace(children=[btn("Gym", "mb:p:1:g:10:2031-11-03"), btn("Water", "mb:p:1:g:11:2031-11-03"),
+                                    btn("Today's mini mission", "mb:p:1:m:2031-11-03"),
+                                    btn("Mini mission + bonus", "mb:p:1:mb:2031-11-03")])
+    msg = SimpleNamespace(content=main.PROOF_ASK, components=[row])
+
+    out = main.proof_reply_after_tap(msg, "mb:p:1:g:10:2031-11-03", "Logged **Gym** for Mon Nov 3. ✅⬜⬜")
+    assert out["content"] == "✅ Logged **Gym** for Mon Nov 3. ✅⬜⬜\n" + main.PROOF_ASK_MORE
+    assert [b.label for b in out["view"].children] == ["Water", "Today's mini mission", "Mini mission + bonus"]
+
+    # the bonus takes both mission buttons with it
+    msg2 = SimpleNamespace(content=out["content"], components=[SimpleNamespace(children=out["view"].children)])
+    out2 = main.proof_reply_after_tap(msg2, "mb:p:1:mb:2031-11-03", "⚡ Mini mission + bonus done: **+0.5** pts.")
+    assert out2["content"].splitlines()[:2] == ["✅ Logged **Gym** for Mon Nov 3. ✅⬜⬜",
+                                                "⚡ Mini mission + bonus done: **+0.5** pts."]
+    assert [b.label for b in out2["view"].children] == ["Water"]
+
+    msg3 = SimpleNamespace(content=out2["content"], components=[SimpleNamespace(children=out2["view"].children)])
+    out3 = main.proof_reply_after_tap(msg3, "mb:p:1:g:11:2031-11-03", "Logged **Water** for Mon Nov 3. ✅")
+    assert out3["content"].endswith(main.PROOF_DONE) and out3["view"] is None
+    assert main.PROOF_ASK not in out3["content"]
+
+
+def test_commish_can_repost_a_roundup(monkeypatch):
+    start = date(2031, 12, 7)
+    db, guild, dms, ch = vote_setup(monkeypatch, 78, start, [2800, 2801])
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 5)))
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    monkeypatch.setattr(game, "now_local", lambda: at(start + timedelta(days=1), 6))
+    a = fake_inter(guild, 99)
+    a.followup = FakeChannel(0)
+    a.response.defer = lambda **kw: asyncio.sleep(0)
+    before = len(guild.ann.sent)
+    run(main.commish_roundup.callback(a, None))
+    assert "Posted the roundup for Sun Dec 7" in a.followup.sent[0][0]
+    posted = guild.ann.sent[before][1]["embeds"]
+    assert posted[0].title == "☀️ Daily roundup: Sun Dec 7" and "<@2800>" in posted[1].description
+    bad = fake_inter(guild, 99)
+    run(main.commish_roundup.callback(bad, "2031-01-01"))
+    assert "Pick a day between" in bad.response.sent[0][0]

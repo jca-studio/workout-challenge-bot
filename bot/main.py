@@ -1352,7 +1352,7 @@ async def on_message(message: discord.Message):
     if not buttons:
         await message.add_reaction("🔥")
         return
-    await message.reply("What's this for? Tap it:", view=make_view(buttons), mention_author=False)
+    await message.reply(PROOF_ASK, view=make_view(buttons), mention_author=False)
 
 
 # ---------- mini missions ----------
@@ -1520,16 +1520,27 @@ def roundup_embeds(ch: Challenge, day: date) -> list[discord.Embed]:
     for uid, pws in s.player_weeks.items():
         pw = pws[-1]
         star = " ✨" if pw.perfect else ""
-        goals = " · ".join(f"{g.name[:22]} {progress_bar(g.days_done, g.target)}" for g in pw.goals) or "no goals yet"
+        goals = "\n".join(f"{progress_bar(g.days_done, g.target)} {g.name[:60]}" for g in pw.goals) or "no goals yet"
         rows.append((pw.points, f"**<@{uid}>** · {fmt(pw.points)} pts{star}\n{goals}"))
     rows.sort(key=lambda r: -r[0])
-    text = "✅ = a day she hit that goal · ⬜ = days still to go this week\n\n" + "\n\n".join(r[1] for r in rows)
-    week_e = discord.Embed(
-        title=f"Week {week.number} so far" if not week_over else f"Week {week.number} goals",
-        description=text[:4096] if rows else "Nobody's playing yet.", color=GOLD)
-    week_e.set_footer(text="Week points include partial credit and the perfect week bonus ✨"
-                      + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
-    return [board, week_e]
+    title = f"Week {week.number} so far" if not week_over else f"Week {week.number} goals"
+    # One block per player (name, then a line per goal), split across embeds so nothing gets cut off.
+    chunks, cur = [], "✅ = a day she hit that goal · ⬜ = days still to go this week"
+    for _, block in rows:
+        if len(cur) + len(block) + 2 > 3900:
+            chunks.append(cur)
+            cur = block
+        else:
+            cur += "\n\n" + block
+    chunks.append(cur)
+    out = [board]
+    for i, text in enumerate(chunks):
+        e = discord.Embed(title=title if i == 0 else f"{title} (cont.)",
+                          description=text if rows else "Nobody's playing yet.", color=GOLD)
+        out.append(e)
+    out[-1].set_footer(text="Week points include partial credit and the perfect week bonus ✨"
+                       + ("" if week_over else ". Late check-ins for this week still count until Friday midnight."))
+    return out
 
 
 def standings_embed(ch: Challenge, through_week: int | None, title: str) -> discord.Embed:
@@ -1714,6 +1725,29 @@ async def commish_post(inter: discord.Interaction):
     await inter.response.send_message(embed=standings_embed(ch, None, f"{ch.name}: standings so far"))
 
 
+@commish.command(name="roundup", description="Post the daily roundup again (yesterday by default) in the announce channel.")
+@app_commands.describe(day="Which day, like 2026-11-22. Leave blank for yesterday.")
+async def commish_roundup(inter: discord.Interaction, day: str | None = None):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id) or db.latest_challenge(inter.guild_id)
+    if not ch or not ch.mode:
+        return await deny(inter, "No roundup yet: the challenge hasn't started.")
+    try:
+        d = date.fromisoformat(day) if day else game.now_local().date() - timedelta(days=1)
+    except ValueError:
+        return await deny(inter, "Write the day like 2026-11-22.")
+    if not ch.start <= d <= ch.end:
+        return await deny(inter, f"Pick a day between {pretty(ch.start)} and {pretty(ch.end)}.")
+    ann = channel(inter.guild, "announce_channel_id")
+    if not ann:
+        return await deny(inter, "Run `/setup` first.")
+    await inter.response.defer(ephemeral=True)
+    for page in message_pages(roundup_embeds(ch, d)):
+        await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
+    await inter.followup.send(f"Posted the roundup for {pretty(d)} in {ann.mention}.", ephemeral=True)
+
+
 bot.tree.add_command(commish)
 
 
@@ -1834,9 +1868,32 @@ async def handle_proof_button(inter: discord.Interaction, owner: int, what: str,
         await inter.response.send_message(result, ephemeral=True)
     if result.startswith(("Logged", "⚡")):
         try:
-            await inter.message.edit(content=inter.message.content + f"\n✅ {result.splitlines()[0]}")
+            await inter.message.edit(**proof_reply_after_tap(inter.message, (getattr(inter, "data", None) or {}).get("custom_id", ""),
+                                                            result.splitlines()[0]))
         except discord.HTTPException:
             pass
+
+
+PROOF_ASK = "What's this for? Tap it:"
+PROOF_ASK_MORE = "Does this photo count for anything else? Tap it:"
+PROOF_DONE = "All set for this photo. 💪"
+
+
+def proof_reply_after_tap(message, tapped: str, result_line: str) -> dict:
+    """Swap the question for what she logged, and keep only the buttons that are still open."""
+    logged = [l for l in (message.content or "").splitlines() if l.startswith(("✅", "⚡"))]
+    logged.append(result_line if result_line.startswith("⚡") else f"✅ {result_line}")
+    parts = tapped.split(":")
+    gone = {tapped}
+    if len(parts) > 4 and parts[3] == "mb":  # the bonus covers the base mission too
+        gone.add(":".join(parts[:3] + ["m"] + parts[4:]))
+    left = []
+    for row in getattr(message, "components", None) or []:
+        for b in getattr(row, "children", []):
+            if getattr(b, "custom_id", None) and b.custom_id not in gone:
+                left.append(discord.ui.Button(label=b.label, emoji=b.emoji, style=b.style, custom_id=b.custom_id))
+    content = "\n".join(logged + [PROOF_ASK_MORE if left else PROOF_DONE])
+    return {"content": content, "view": make_view(left) if left else None}
 
 
 async def handle_reminder(inter: discord.Interaction, goal_id: int, day: date, yes: bool):
@@ -1974,12 +2031,14 @@ async def run_jobs(guild: discord.Guild, ch: Challenge, now: datetime):
     if ch.start < today <= ch.end and now.hour >= config.ROUNDUP_HOUR and not db.job_done(ch.id, "roundup", key):
         db.mark_job(ch.id, "roundup", key)
         if ann:
-            await ann.send(embeds=roundup_embeds(ch, today - timedelta(days=1)))
+            for page in message_pages(roundup_embeds(ch, today - timedelta(days=1))):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
 
     if today > ch.end and now.hour >= config.STANDINGS_HOUR and not db.job_done(ch.id, "final", "1"):
         db.mark_job(ch.id, "final", "1")
         if ann:  # the last week's checkmarks first (it never gets a Saturday roundup), then the crowning
-            await ann.send(embeds=roundup_embeds(ch, ch.end))
+            for page in message_pages(roundup_embeds(ch, ch.end)):
+                await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
         await finish(guild, ch, ann)
 
 
