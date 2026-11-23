@@ -1293,3 +1293,28 @@ def test_mission_bonus_from_text_and_photo_buttons(monkeypatch):
     run(main.mission_done.callback(inter, None, True))
     assert "The bonus needs a photo" in inter.followup.sent[0][0]
     assert start not in dict(db.mission_completions(ch.id, 2702))
+
+
+def test_proof_reply_shows_what_was_logged_and_whats_left():
+    def btn(label, cid):
+        return SimpleNamespace(label=label, emoji="✅", style=discord.ButtonStyle.primary, custom_id=cid)
+    row = SimpleNamespace(children=[btn("Gym", "mb:p:1:g:10:2031-11-03"), btn("Water", "mb:p:1:g:11:2031-11-03"),
+                                    btn("Today's mini mission", "mb:p:1:m:2031-11-03"),
+                                    btn("Mini mission + bonus", "mb:p:1:mb:2031-11-03")])
+    msg = SimpleNamespace(content=main.PROOF_ASK, components=[row])
+
+    out = main.proof_reply_after_tap(msg, "mb:p:1:g:10:2031-11-03", "Logged **Gym** for Mon Nov 3. ✅⬜⬜")
+    assert out["content"] == "✅ Logged **Gym** for Mon Nov 3. ✅⬜⬜\n" + main.PROOF_ASK_MORE
+    assert [b.label for b in out["view"].children] == ["Water", "Today's mini mission", "Mini mission + bonus"]
+
+    # the bonus takes both mission buttons with it
+    msg2 = SimpleNamespace(content=out["content"], components=[SimpleNamespace(children=out["view"].children)])
+    out2 = main.proof_reply_after_tap(msg2, "mb:p:1:mb:2031-11-03", "⚡ Mini mission + bonus done: **+0.5** pts.")
+    assert out2["content"].splitlines()[:2] == ["✅ Logged **Gym** for Mon Nov 3. ✅⬜⬜",
+                                                "⚡ Mini mission + bonus done: **+0.5** pts."]
+    assert [b.label for b in out2["view"].children] == ["Water"]
+
+    msg3 = SimpleNamespace(content=out2["content"], components=[SimpleNamespace(children=out2["view"].children)])
+    out3 = main.proof_reply_after_tap(msg3, "mb:p:1:g:11:2031-11-03", "Logged **Water** for Mon Nov 3. ✅")
+    assert out3["content"].endswith(main.PROOF_DONE) and out3["view"] is None
+    assert main.PROOF_ASK not in out3["content"]

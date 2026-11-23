@@ -1352,7 +1352,7 @@ async def on_message(message: discord.Message):
     if not buttons:
         await message.add_reaction("🔥")
         return
-    await message.reply("What's this for? Tap it:", view=make_view(buttons), mention_author=False)
+    await message.reply(PROOF_ASK, view=make_view(buttons), mention_author=False)
 
 
 # ---------- mini missions ----------
@@ -1834,9 +1834,32 @@ async def handle_proof_button(inter: discord.Interaction, owner: int, what: str,
         await inter.response.send_message(result, ephemeral=True)
     if result.startswith(("Logged", "⚡")):
         try:
-            await inter.message.edit(content=inter.message.content + f"\n✅ {result.splitlines()[0]}")
+            await inter.message.edit(**proof_reply_after_tap(inter.message, (getattr(inter, "data", None) or {}).get("custom_id", ""),
+                                                            result.splitlines()[0]))
         except discord.HTTPException:
             pass
+
+
+PROOF_ASK = "What's this for? Tap it:"
+PROOF_ASK_MORE = "Does this photo count for anything else? Tap it:"
+PROOF_DONE = "All set for this photo. 💪"
+
+
+def proof_reply_after_tap(message, tapped: str, result_line: str) -> dict:
+    """Swap the question for what she logged, and keep only the buttons that are still open."""
+    logged = [l for l in (message.content or "").splitlines() if l.startswith(("✅", "⚡"))]
+    logged.append(result_line if result_line.startswith("⚡") else f"✅ {result_line}")
+    parts = tapped.split(":")
+    gone = {tapped}
+    if len(parts) > 4 and parts[3] == "mb":  # the bonus covers the base mission too
+        gone.add(":".join(parts[:3] + ["m"] + parts[4:]))
+    left = []
+    for row in getattr(message, "components", None) or []:
+        for b in getattr(row, "children", []):
+            if getattr(b, "custom_id", None) and b.custom_id not in gone:
+                left.append(discord.ui.Button(label=b.label, emoji=b.emoji, style=b.style, custom_id=b.custom_id))
+    content = "\n".join(logged + [PROOF_ASK_MORE if left else PROOF_DONE])
+    return {"content": content, "view": make_view(left) if left else None}
 
 
 async def handle_reminder(inter: discord.Interaction, goal_id: int, day: date, yes: bool):

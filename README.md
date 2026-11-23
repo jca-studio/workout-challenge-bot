@@ -86,7 +86,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 
 ## How players use it
 
-- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too, plus **Mini mission + bonus** when the mission has a bonus.
+- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too, plus **Mini mission + bonus** when the mission has a bonus. After each tap, the bot's reply changes to what you logged (with your progress for the week) and keeps only the buttons still open, so one photo can count for more than one thing.
 - **Check in without a photo:** `/checkin`, or tap the button in the 6 p.m. reminder.
 - **Log an earlier day:** `/checkin` and pick the day. This works until Friday at midnight.
 - **Late nights:** a photo posted before 3 a.m. offers buttons for yesterday as well as today, and each week stays open until 3 a.m. Saturday.
@@ -167,7 +167,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 88 tests, including a simulated month
+python -m pytest                 # 89 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```
