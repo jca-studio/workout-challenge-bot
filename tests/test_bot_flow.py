@@ -1318,3 +1318,23 @@ def test_proof_reply_shows_what_was_logged_and_whats_left():
     out3 = main.proof_reply_after_tap(msg3, "mb:p:1:g:11:2031-11-03", "Logged **Water** for Mon Nov 3. ✅")
     assert out3["content"].endswith(main.PROOF_DONE) and out3["view"] is None
     assert main.PROOF_ASK not in out3["content"]
+
+
+def test_commish_can_repost_a_roundup(monkeypatch):
+    start = date(2031, 12, 7)
+    db, guild, dms, ch = vote_setup(monkeypatch, 78, start, [2800, 2801])
+    run = asyncio.new_event_loop().run_until_complete
+    run(main.run_jobs(guild, db.get_challenge(ch.id), at(start, 5)))
+    monkeypatch.setattr(main, "is_commish", lambda inter: True)
+    monkeypatch.setattr(game, "now_local", lambda: at(start + timedelta(days=1), 6))
+    a = fake_inter(guild, 99)
+    a.followup = FakeChannel(0)
+    a.response.defer = lambda **kw: asyncio.sleep(0)
+    before = len(guild.ann.sent)
+    run(main.commish_roundup.callback(a, None))
+    assert "Posted the roundup for Sun Dec 7" in a.followup.sent[0][0]
+    posted = guild.ann.sent[before][1]["embeds"]
+    assert posted[0].title == "☀️ Daily roundup: Sun Dec 7" and "<@2800>" in posted[1].description
+    bad = fake_inter(guild, 99)
+    run(main.commish_roundup.callback(bad, "2031-01-01"))
+    assert "Pick a day between" in bad.response.sent[0][0]

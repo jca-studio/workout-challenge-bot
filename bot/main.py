@@ -1725,6 +1725,29 @@ async def commish_post(inter: discord.Interaction):
     await inter.response.send_message(embed=standings_embed(ch, None, f"{ch.name}: standings so far"))
 
 
+@commish.command(name="roundup", description="Post the daily roundup again (yesterday by default) in the announce channel.")
+@app_commands.describe(day="Which day, like 2026-11-22. Leave blank for yesterday.")
+async def commish_roundup(inter: discord.Interaction, day: str | None = None):
+    if not is_commish(inter):
+        return await deny(inter, "Only the commissioner can do that.")
+    ch = db.current_challenge(inter.guild_id) or db.latest_challenge(inter.guild_id)
+    if not ch or not ch.mode:
+        return await deny(inter, "No roundup yet: the challenge hasn't started.")
+    try:
+        d = date.fromisoformat(day) if day else game.now_local().date() - timedelta(days=1)
+    except ValueError:
+        return await deny(inter, "Write the day like 2026-11-22.")
+    if not ch.start <= d <= ch.end:
+        return await deny(inter, f"Pick a day between {pretty(ch.start)} and {pretty(ch.end)}.")
+    ann = channel(inter.guild, "announce_channel_id")
+    if not ann:
+        return await deny(inter, "Run `/setup` first.")
+    await inter.response.defer(ephemeral=True)
+    for page in message_pages(roundup_embeds(ch, d)):
+        await ann.send(embeds=page, allowed_mentions=discord.AllowedMentions.none())
+    await inter.followup.send(f"Posted the roundup for {pretty(d)} in {ann.mention}.", ephemeral=True)
+
+
 bot.tree.add_command(commish)
 
 

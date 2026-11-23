@@ -69,6 +69,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 | At the deadline | The bot closes sign-ups at midnight after the deadline day. `/challenge lock` closes them early. If fewer than 2 people have joined, sign-ups stay open until the start date |
 | During the month | Nothing. The bot runs it |
 | If something's wrong | `/commish add-checkin`, `/commish remove-checkin`, `/commish mission-points` |
+| Repost a roundup | `/commish roundup` posts yesterday's roundup again with today's data (or pick a `day`) |
 | Someone needs a nudge | `/commish warn` pings and DMs everyone without 3 goals right away ("by tonight" or "by tomorrow", depending on the deadline) |
 | Someone drops out | Players can run `/challenge leave`. The commissioner can run `/commish remove` (type REMOVE to confirm). Either way her points stop counting and team averages are recalculated |
 | After the last day | At 5 a.m. the bot posts final standings, hands out the winner roles and crowns the winners' nicknames |
@@ -167,7 +168,7 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 89 tests, including a simulated month
+python -m pytest                 # 90 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```
