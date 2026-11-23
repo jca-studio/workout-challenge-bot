@@ -1338,3 +1338,27 @@ def test_commish_can_repost_a_roundup(monkeypatch):
     bad = fake_inter(guild, 99)
     run(main.commish_roundup.callback(bad, "2031-01-01"))
     assert "Pick a day between" in bad.response.sent[0][0]
+
+
+def test_roundup_shows_purple_mini_mission_bar():
+    db = main.db
+    ch = db.create_challenge(79, "Purple", date(2031, 11, 2), date(2031, 11, 30), 99)  # Sun Nov 2 start
+    db.join(ch.id, 2900)
+    db.set_goals(ch.id, 2900, [("Gym", 3), ("Water", 7), ("Read", 7)], False)
+    db.approve_goals(ch.id)
+    db.update_challenge(ch.id, status="active", mode="individual")
+    ch = db.get_challenge(ch.id)
+    gym = db.goals(ch.id, 2900)[0]
+    db.add_checkin(gym.id, 2900, date(2031, 11, 2), None)
+    db.complete_mission(ch.id, 2900, date(2031, 11, 2), 0.5, None)
+    db.complete_mission(ch.id, 2900, date(2031, 11, 3), 0.25, None)
+    week_e = main.roundup_embeds(ch, date(2031, 11, 3))[1]
+    text = week_e.description
+    assert "🟪 = a mini mission done" in text
+    block = text.split("**<@2900>**")[1]
+    lines = block.splitlines()
+    assert "✅⬜⬜ Gym" in block
+    assert lines[-1] == "🟪🟪⬜⬜⬜⬜ Mini missions · +0.75"  # Sun–Fri: 6 mission days
+    goal_pts = game.standings(db, ch, 1).player_weeks[2900][-1].points
+    assert lines[0] == f" · {main.fmt(goal_pts + 0.75)} pts"
+    print("\n" + text)
