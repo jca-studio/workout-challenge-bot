@@ -86,7 +86,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 
 ## How players use it
 
-- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too.
+- **Check in with a photo:** post it in the proof channel and tap which goal it's for. A button for today's mini mission shows up there too, plus **Mini mission + bonus** when the mission has a bonus.
 - **Check in without a photo:** `/checkin`, or tap the button in the 6 p.m. reminder.
 - **Log an earlier day:** `/checkin` and pick the day. This works until Friday at midnight.
 - **Late nights:** a photo posted before 3 a.m. offers buttons for yesterday as well as today, and each week stays open until 3 a.m. Saturday.
@@ -106,6 +106,7 @@ This loads the 59 mini missions from `data/missions.csv`. The mission channel is
 - **Perfect week:** hit all 3 goals and you get **+1 bonus point**, for a max of 4 a week.
 - **Team bonus:** every player on a team has a perfect week, so the team gets **+1 point per player** that week.
 - **Mini missions:** 0.25 (easy) or 0.5 (harder), open for 24 hours, no cap. They never count toward a perfect week.
+- **Mission bonuses:** some missions pay more if you go further, like sharing a recipe (0.25) vs. making it and posting a photo (0.5 total). The bonus needs a photo: tap **Mini mission + bonus** on a proof photo, or `/mission done bonus:True` with a photo. Doing the bonus after the base mission raises it to the bonus total; it doesn't add on top.
 - **Partial weeks:** in a short week at the start or end of the month, targets shrink to fit, rounding up.
 - **Team scores:** compared by average per player, so a team with one extra player can't win on headcount.
 - **Ties:** players or teams tied at the top share the win.
@@ -159,13 +160,14 @@ Change these in Railway's **Variables**. The bot restarts with the new value.
 
 1. Edit the Mini Mission Bank sheet and download it as CSV. It needs the columns Day, Mission and Points.
 2. Run `/missions import` and attach the file. This replaces the whole bank.
-3. To add a single mission, use `/missions add`. To go back to the built-in list, use `/missions reset`. `/missions count` shows how many each day has.
+3. To give a mission a bonus, write it in the Mission text like this: `Share a healthy recipe (bonus: 0.5 total if you make it and post a photo)`. The bot reads the bonus total from that and offers the bonus button.
+4. To add a single mission, use `/missions add`. To go back to the built-in list, use `/missions reset`. `/missions count` shows how many each day has.
 
 ## For whoever maintains the code
 
 ```
 pip install -r requirements.txt pytest
-python -m pytest                 # 86 tests, including a simulated month
+python -m pytest                 # 88 tests, including a simulated month
 python sim/simulate.py           # full season, hour by hour, 14 player personas; writes sim/transcript.md
 DISCORD_TOKEN=... python -m bot.main
 ```

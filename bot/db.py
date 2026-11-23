@@ -398,6 +398,13 @@ class DB:
                       (challenge_id, user_id, day.isoformat(), points, proof_url, datetime.now(UTC).isoformat()))
         return cur.rowcount == 1
 
+    def upgrade_mission(self, challenge_id: int, user_id: int, day: date, points: float, proof_url: str | None) -> bool:
+        """Raise an existing completion to the bonus points. False if there's nothing to raise."""
+        cur = self._x("UPDATE mission_completions SET points=?, proof_url=COALESCE(?, proof_url) "
+                      "WHERE challenge_id=? AND user_id=? AND day=? AND points<?",
+                      (points, proof_url, challenge_id, user_id, day.isoformat(), points))
+        return cur.rowcount == 1
+
     def set_mission_points(self, challenge_id: int, user_id: int, day: date, points: float):
         if points <= 0:
             self._x("DELETE FROM mission_completions WHERE challenge_id=? AND user_id=? AND day=?",
